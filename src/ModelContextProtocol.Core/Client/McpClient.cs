@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace ModelContextProtocol.Client;
 
 /// <inheritdoc/>
-public sealed partial class McpClient : McpEndpoint, IMcpClient
+internal sealed partial class McpClient : McpEndpoint, IMcpClient
 {
     private static Implementation DefaultImplementation { get; } = new()
     {
