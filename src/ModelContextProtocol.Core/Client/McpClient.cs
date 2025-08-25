@@ -23,6 +23,18 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     private Implementation? _serverInfo;
     private string? _serverInstructions;
 
+    /// <inheritdoc/>
+    public bool IsConnected => _sessionTransport is not null;
+
+    /// <inheritdoc/>
+    public event EventHandler<ConnectedEventArgs>? Connected;
+
+    /// <inheritdoc/>
+    public event EventHandler<DisconnectedEventArgs>? Disconnected;
+
+    /// <inheritdoc/>
+    public event EventHandler<ConnectionErrorEventArgs>? ConnectionError;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="McpClient"/> class.
     /// </summary>
@@ -185,6 +197,9 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
                     McpJsonUtilities.JsonContext.Default.InitializedNotificationParams,
                     cancellationToken: initializationCts.Token).ConfigureAwait(false);
 
+                // Fire the Connected event
+                OnConnected(new ConnectedEventArgs(DateTime.UtcNow, _serverInfo));
+
             }
             catch (OperationCanceledException oce) when (initializationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
@@ -195,6 +210,16 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
         catch (Exception e)
         {
             LogClientInitializationError(EndpointName, e);
+            
+            // Fire connection error event
+            OnConnectionError(new ConnectionErrorEventArgs(e, isRetryable: true));
+            
+            // Fire disconnected event if we had a transport
+            if (_sessionTransport is not null)
+            {
+                OnDisconnected(new DisconnectedEventArgs(DateTime.UtcNow, isGraceful: false, e));
+            }
+            
             await DisposeAsync().ConfigureAwait(false);
             throw;
         }
@@ -217,7 +242,11 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
         {
             if (_sessionTransport is not null)
             {
+                // Fire the Disconnected event before disposing the transport
+                OnDisconnected(new DisconnectedEventArgs(DateTime.UtcNow, isGraceful: true));
+                
                 await _sessionTransport.DisposeAsync().ConfigureAwait(false);
+                _sessionTransport = null;
             }
         }
     }
@@ -233,4 +262,61 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
 
     [LoggerMessage(Level = LogLevel.Error, Message = "{EndpointName} client protocol version mismatch with server. Expected '{Expected}', received '{Received}'.")]
     private partial void LogServerProtocolVersionMismatch(string endpointName, string expected, string received);
+
+    /// <summary>
+    /// Raises the Connected event.
+    /// </summary>
+    private void OnConnected(ConnectedEventArgs e)
+    {
+        try
+        {
+            Connected?.Invoke(this, e);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - event handlers shouldn't break the connection
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(ex, "Error in Connected event handler for {EndpointName}", EndpointName);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Raises the Disconnected event.
+    /// </summary>
+    private void OnDisconnected(DisconnectedEventArgs e)
+    {
+        try
+        {
+            Disconnected?.Invoke(this, e);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - event handlers shouldn't break the disconnection
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(ex, "Error in Disconnected event handler for {EndpointName}", EndpointName);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Raises the ConnectionError event.
+    /// </summary>
+    private void OnConnectionError(ConnectionErrorEventArgs e)
+    {
+        try
+        {
+            ConnectionError?.Invoke(this, e);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw - event handlers shouldn't break the error handling
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(ex, "Error in ConnectionError event handler for {EndpointName}", EndpointName);
+            }
+        }
+    }
 }
