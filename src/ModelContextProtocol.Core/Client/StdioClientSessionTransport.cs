@@ -1,16 +1,17 @@
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
+using System.Threading;
+using System.IO;
 
 namespace ModelContextProtocol.Client;
 
 /// <summary>Provides the client side of a stdio-based session transport.</summary>
-internal sealed class StdioClientSessionTransport : StreamClientSessionTransport
+internal sealed partial class StdioClientSessionTransport : StreamClientSessionTransport
 {
     private readonly StdioClientTransportOptions _options;
     private readonly Process _process;
     private readonly Queue<string> _stderrRollingLog;
-    private int _cleanedUp = 0;
 
     public StdioClientSessionTransport(StdioClientTransportOptions options, Process process, string endpointName, Queue<string> stderrRollingLog, ILoggerFactory? loggerFactory)
         : base(process.StandardInput.BaseStream, process.StandardOutput.BaseStream, encoding: null, endpointName, loggerFactory)
@@ -43,12 +44,6 @@ internal sealed class StdioClientSessionTransport : StreamClientSessionTransport
     /// <inheritdoc/>
     protected override async ValueTask CleanupAsync(Exception? error = null, CancellationToken cancellationToken = default)
     {
-        // Only clean up once.
-        if (Interlocked.Exchange(ref _cleanedUp, 1) != 0)
-        {
-            return;
-        }
-
         // We've not yet forcefully terminated the server. If it's already shut down, something went wrong,
         // so create an exception with details about that.
         error ??= await GetUnexpectedExitExceptionAsync(cancellationToken).ConfigureAwait(false);
@@ -63,8 +58,7 @@ internal sealed class StdioClientSessionTransport : StreamClientSessionTransport
             LogTransportShutdownFailed(Name, ex);
         }
 
-        // And handle cleanup in the base type.
-        await base.CleanupAsync(error, cancellationToken);
+        await base.CleanupAsync(error, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<Exception?> GetUnexpectedExitExceptionAsync(CancellationToken cancellationToken)

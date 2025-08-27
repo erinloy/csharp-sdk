@@ -68,4 +68,14 @@ public interface ITransport : IAsyncDisposable
     /// </para>
     /// </remarks>
     Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default);
+    
+    /// <summary>
+    /// Gets a value indicating whether the underlying transport connection is still alive.
+    /// </summary>
+    /// <remarks>
+    /// For stdio transports, this checks if the process is still running.
+    /// For HTTP/SSE transports, this checks if the connection is still active.
+    /// For other transports, this checks the connection state.
+    /// </remarks>
+    bool IsAlive { get; }
 }

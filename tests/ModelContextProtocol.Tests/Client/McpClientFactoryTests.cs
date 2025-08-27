@@ -110,6 +110,7 @@ public class McpClientFactoryTests
 
         public bool IsConnected => true;
         public string? SessionId => null;
+        public bool IsAlive => true;
 
         public ChannelReader<JsonRpcMessage> MessageReader => _channel.Reader;
 

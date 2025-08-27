@@ -9,6 +9,8 @@ public class TestServerTransport : ITransport
     private readonly Channel<JsonRpcMessage> _messageChannel;
 
     public bool IsConnected { get; set; }
+    
+    public bool IsAlive => IsConnected;
 
     public ChannelReader<JsonRpcMessage> MessageReader => _messageChannel;
 

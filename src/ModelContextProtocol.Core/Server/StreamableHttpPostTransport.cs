@@ -51,6 +51,9 @@ internal sealed class StreamableHttpPostTransport(StreamableHttpServerTransport 
         await _sseWriter.SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
+    public bool IsAlive => parentTransport.IsAlive;
+    
     public async ValueTask DisposeAsync()
     {
         await _sseWriter.DisposeAsync().ConfigureAwait(false);

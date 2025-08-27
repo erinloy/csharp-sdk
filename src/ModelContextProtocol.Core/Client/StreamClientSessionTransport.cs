@@ -15,6 +15,7 @@ internal class StreamClientSessionTransport : TransportBase
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _shutdownCts = new();
     private Task? _readTask;
+    protected CancellationTokenSource? ReadCancellationTokenSource { get; set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamClientSessionTransport"/> class.
@@ -123,7 +124,7 @@ internal class StreamClientSessionTransport : TransportBase
     public override ValueTask DisposeAsync() =>
         CleanupAsync(cancellationToken: CancellationToken.None);
 
-    private async Task ReadMessagesAsync(CancellationToken cancellationToken)
+    protected virtual async Task ReadMessagesAsync(CancellationToken cancellationToken)
     {
         Exception? error = null;
         try

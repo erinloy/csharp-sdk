@@ -54,6 +54,9 @@ public sealed class SseResponseStreamTransport(Stream sseResponseStream, string?
     public string? SessionId { get; } = sessionId;
 
     /// <inheritdoc/>
+    public bool IsAlive => _isConnected;
+
+    /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
         _isConnected = false;

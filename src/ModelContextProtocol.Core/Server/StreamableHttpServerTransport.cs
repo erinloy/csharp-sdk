@@ -122,6 +122,9 @@ public sealed class StreamableHttpServerTransport : ITransport
     }
 
     /// <inheritdoc/>
+    public bool IsAlive => !_disposeCts.IsCancellationRequested;
+    
+    /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
         try

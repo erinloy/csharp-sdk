@@ -111,6 +111,9 @@ internal sealed partial class AutoDetectingClientSessionTransport : ITransport
         }
     }
 
+    /// <inheritdoc/>
+    public bool IsAlive => ActiveTransport?.IsAlive ?? false;
+    
     public async ValueTask DisposeAsync()
     {
         try

@@ -80,6 +80,9 @@ public abstract partial class TransportBase : ITransport
     public abstract Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default);
 
     /// <inheritdoc/>
+    public virtual bool IsAlive => _state == StateConnected;
+
+    /// <inheritdoc/>
     public abstract ValueTask DisposeAsync();
 
     /// <summary>

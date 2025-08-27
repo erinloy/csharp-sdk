@@ -124,6 +124,16 @@ public sealed partial class StdioClientTransport : IClientTransport
             }
 
             process = new() { StartInfo = startInfo };
+            
+            // Enable process exit events BEFORE starting the process
+            try
+            {
+                process.EnableRaisingEvents = true;
+            }
+            catch
+            {
+                // Some environments might not support this
+            }
 
             // Set up stderr handling. Log all stderr output, and keep the last
             // few lines in a rolling log for use in exceptions.
@@ -176,7 +186,8 @@ public sealed partial class StdioClientTransport : IClientTransport
                 LogTransportProcessStartFailed(logger, endpointName);
                 throw new IOException("Failed to start MCP server process.");
             }
-
+            
+            // Log the process ID for debugging
             LogTransportProcessStarted(logger, endpointName, process.Id);
 
             process.BeginErrorReadLine();
@@ -247,12 +258,12 @@ public sealed partial class StdioClientTransport : IClientTransport
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{EndpointName} failed to start server process.")]
     private static partial void LogTransportProcessStartFailed(ILogger logger, string endpointName);
+    
+    [LoggerMessage(Level = LogLevel.Information, Message = "{EndpointName} transport process started with PID {ProcessId}.")]
+    private static partial void LogTransportProcessStarted(ILogger logger, string endpointName, int processId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{EndpointName} received stderr log: '{Data}'.")]
     private static partial void LogReadStderr(ILogger logger, string endpointName, string data);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "{EndpointName} started server process with PID {ProcessId}.")]
-    private static partial void LogTransportProcessStarted(ILogger logger, string endpointName, int processId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{EndpointName} connect failed.")]
     private static partial void LogTransportConnectFailed(ILogger logger, string endpointName, Exception exception);

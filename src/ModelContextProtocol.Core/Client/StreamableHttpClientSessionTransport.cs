@@ -26,6 +26,8 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
 
     private readonly SemaphoreSlim _disposeLock = new(1, 1);
     private bool _disposed;
+    private bool _isDisposingGracefully = false;
+    private Exception? _transportFailureException = null;
 
     public StreamableHttpClientSessionTransport(
         string endpointName,
@@ -117,6 +119,9 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
             _negotiatedProtocolVersion = initializeResult?.ProtocolVersion;
 
             _getReceiveTask = ReceiveUnsolicitedMessagesAsync();
+            
+            // Monitor the GET request task for unexpected termination
+            _ = MonitorTransportHealthAsync();
         }
 
         return response;
@@ -131,6 +136,12 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
             return;
         }
         _disposed = true;
+        
+        // Mark as graceful if we're disposing normally
+        if (_transportFailureException == null)
+        {
+            _isDisposingGracefully = true;
+        }
 
         try
         {
@@ -163,7 +174,66 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
             // This class isn't directly exposed to public callers, so we don't have to worry about changing the _state in this case.
             if (_options.TransportMode is not HttpTransportMode.AutoDetect || _getReceiveTask is not null)
             {
-                SetDisconnected();
+                SetDisconnected(_transportFailureException);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Monitors the transport health and detects unexpected disconnections
+    /// </summary>
+    private async Task MonitorTransportHealthAsync()
+    {
+        if (_getReceiveTask == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Wait for the GET receive task to complete
+            await _getReceiveTask.ConfigureAwait(false);
+            
+            // If we get here, the GET request has ended
+            // This could be graceful or ungraceful - check our state
+            if (!_isDisposingGracefully)
+            {
+                // The transport ended but we didn't initiate disposal - this is ungraceful
+                _transportFailureException = new IOException("HTTP/SSE transport connection terminated unexpectedly");
+                
+                // Log the unexpected termination
+                if (Logger.IsEnabled(LogLevel.Warning))
+                {
+                    Logger.LogWarning("HTTP/SSE transport connection terminated unexpectedly for {EndpointName}", Name);
+                }
+                
+                // Trigger disposal which will fire the ungraceful disconnection event
+                _ = DisposeAsync();
+            }
+        }
+        catch (OperationCanceledException) when (_isDisposingGracefully)
+        {
+            // This is expected during graceful shutdown
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                Logger.LogDebug("Transport monitoring cancelled during graceful shutdown for {EndpointName}", Name);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Transport failure detected
+            if (!_isDisposingGracefully)
+            {
+                _transportFailureException = ex;
+                
+                // Log the transport failure
+                if (Logger.IsEnabled(LogLevel.Error))
+                {
+                    Logger.LogError(ex, "Transport failure detected for {EndpointName}", Name);
+                }
+                
+                // Trigger disposal which will fire the ungraceful disconnection event
+                _ = DisposeAsync();
             }
         }
     }

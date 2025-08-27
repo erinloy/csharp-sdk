@@ -22,9 +22,21 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     private ServerCapabilities? _serverCapabilities;
     private Implementation? _serverInfo;
     private string? _serverInstructions;
+    private int _disconnectedEventFired;
 
     /// <inheritdoc/>
-    public bool IsConnected => _sessionTransport is not null;
+    public bool IsConnected
+    {
+        get
+        {
+            // Check if we have a session transport
+            if (_sessionTransport is null)
+                return false;
+                
+            // Use the transport's IsAlive property which checks process for stdio transports
+            return _sessionTransport.IsAlive;
+        }
+    }
 
     /// <inheritdoc/>
     public event EventHandler<ConnectedEventArgs>? Connected;
@@ -136,6 +148,9 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     /// </summary>
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
+        // Reset disconnected flag for reconnection scenarios
+        _disconnectedEventFired = 0;
+        
         _connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cancellationToken = _connectCts.Token;
 
@@ -199,7 +214,55 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
 
                 // Fire the Connected event
                 OnConnected(new ConnectedEventArgs(DateTime.UtcNow, _serverInfo));
-
+                
+                // Monitor for unexpected disconnection (simple EOF detection)
+                _ = Task.Run(async () => 
+                {
+                    // Give the caller a moment to register event handlers
+                    // This is necessary because McpClientFactory.CreateAsync calls ConnectAsync
+                    // but event handlers are typically registered AFTER CreateAsync returns
+                    // This delay MUST happen before ANY disconnection detection
+                    await Task.Delay(500).ConfigureAwait(false);
+                    
+                    try
+                    {
+                        // Wait for the message processing to complete (EOF or error)
+                        if (MessageProcessingTask != null)
+                        {
+                            await MessageProcessingTask.ConfigureAwait(false);
+                            
+                            // If we get here, the transport ended unexpectedly
+                            if (_disconnectedEventFired == 0)
+                            {
+                                OnDisconnected(new DisconnectedEventArgs(
+                                    DateTime.UtcNow, 
+                                    isGraceful: false,
+                                    error: new IOException("Transport connection terminated unexpectedly")));
+                                    
+                                // Trigger disposal to clean up
+                                _ = DisposeAsync();
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected during shutdown
+                    }
+                    catch (Exception ex)
+                    {
+                        // Transport failure
+                        
+                        if (_disconnectedEventFired == 0)
+                        {
+                            OnDisconnected(new DisconnectedEventArgs(
+                                DateTime.UtcNow, 
+                                isGraceful: false,
+                                error: ex));
+                                
+                            _ = DisposeAsync();
+                        }
+                    }
+                });
             }
             catch (OperationCanceledException oce) when (initializationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
@@ -236,14 +299,21 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
                 _connectCts.Dispose();
             }
 
+            // Base class disposal will cancel the session and wait for MessageProcessingTask
             await base.DisposeUnsynchronizedAsync().ConfigureAwait(false);
         }
         finally
         {
             if (_sessionTransport is not null)
             {
-                // Fire the Disconnected event before disposing the transport
-                OnDisconnected(new DisconnectedEventArgs(DateTime.UtcNow, isGraceful: true));
+                // Fire the Disconnected event before disposing the transport (if not already fired)
+                if (_disconnectedEventFired == 0)
+                {
+                    OnDisconnected(new DisconnectedEventArgs(
+                        DateTime.UtcNow, 
+                        isGraceful: true,
+                        error: null));
+                }
                 
                 await _sessionTransport.DisposeAsync().ConfigureAwait(false);
                 _sessionTransport = null;
@@ -287,6 +357,11 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     /// </summary>
     private void OnDisconnected(DisconnectedEventArgs e)
     {
+        if (Interlocked.CompareExchange(ref _disconnectedEventFired, 1, 0) != 0)
+        {
+            return; // Already fired
+        }
+        
         try
         {
             Disconnected?.Invoke(this, e);
