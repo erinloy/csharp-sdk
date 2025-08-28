@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using System.Text.Json;
+using System.Threading;
 
 namespace ModelContextProtocol.Client;
 
@@ -23,6 +24,7 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     private Implementation? _serverInfo;
     private string? _serverInstructions;
     private int _disconnectedEventFired;
+    private bool _isDisposing;
 
     /// <inheritdoc/>
     public bool IsConnected
@@ -215,54 +217,8 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
                 // Fire the Connected event
                 OnConnected(new ConnectedEventArgs(DateTime.UtcNow, _serverInfo));
                 
-                // Monitor for unexpected disconnection (simple EOF detection)
-                _ = Task.Run(async () => 
-                {
-                    // Give the caller a moment to register event handlers
-                    // This is necessary because McpClientFactory.CreateAsync calls ConnectAsync
-                    // but event handlers are typically registered AFTER CreateAsync returns
-                    // This delay MUST happen before ANY disconnection detection
-                    await Task.Delay(500).ConfigureAwait(false);
-                    
-                    try
-                    {
-                        // Wait for the message processing to complete (EOF or error)
-                        if (MessageProcessingTask != null)
-                        {
-                            await MessageProcessingTask.ConfigureAwait(false);
-                            
-                            // If we get here, the transport ended unexpectedly
-                            if (_disconnectedEventFired == 0)
-                            {
-                                OnDisconnected(new DisconnectedEventArgs(
-                                    DateTime.UtcNow, 
-                                    isGraceful: false,
-                                    error: new IOException("Transport connection terminated unexpectedly")));
-                                    
-                                // Trigger disposal to clean up
-                                _ = DisposeAsync();
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Expected during shutdown
-                    }
-                    catch (Exception ex)
-                    {
-                        // Transport failure
-                        
-                        if (_disconnectedEventFired == 0)
-                        {
-                            OnDisconnected(new DisconnectedEventArgs(
-                                DateTime.UtcNow, 
-                                isGraceful: false,
-                                error: ex));
-                                
-                            _ = DisposeAsync();
-                        }
-                    }
-                });
+                // Hook into MessageProcessingTask to detect disconnection
+                RegisterDisconnectionDetection();
             }
             catch (OperationCanceledException oce) when (initializationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
@@ -291,6 +247,8 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
     /// <inheritdoc/>
     public override async ValueTask DisposeUnsynchronizedAsync()
     {
+        _isDisposing = true;
+        
         try
         {
             if (_connectCts is not null)
@@ -332,7 +290,60 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
 
     [LoggerMessage(Level = LogLevel.Error, Message = "{EndpointName} client protocol version mismatch with server. Expected '{Expected}', received '{Received}'.")]
     private partial void LogServerProtocolVersionMismatch(string endpointName, string expected, string received);
+    
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Error in {EventName} event handler for {EndpointName}.")]
+    private partial void LogEventHandlerError(string eventName, string endpointName, Exception exception);
+    
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{EndpointName} transport disconnected unexpectedly.")]
+    private partial void LogTransportDisconnectedUnexpectedly(string endpointName, Exception? exception);
 
+    /// <summary>
+    /// Registers a continuation on MessageProcessingTask to detect disconnection.
+    /// </summary>
+    private void RegisterDisconnectionDetection()
+    {
+        if (MessageProcessingTask == null)
+        {
+            return;
+        }
+        
+        // Register a continuation to detect when message processing ends
+        _ = MessageProcessingTask.ContinueWith(task =>
+        {
+            // Only fire disconnected event if we haven't already and this wasn't a graceful shutdown
+            if (Interlocked.CompareExchange(ref _disconnectedEventFired, 1, 0) == 0)
+            {
+                // Check if this was a graceful shutdown (disposal initiated)
+                bool isGraceful = _isDisposing;
+                Exception? error = null;
+                
+                if (!isGraceful)
+                {
+                    // Ungraceful disconnection - extract error if available
+                    if (task.IsFaulted)
+                    {
+                        error = task.Exception?.GetBaseException();
+                    }
+                    else if (!task.IsCanceled)
+                    {
+                        // Task completed normally but we didn't initiate disposal
+                        error = new IOException("Transport connection terminated unexpectedly");
+                    }
+                    
+                    if (error != null)
+                    {
+                        LogTransportDisconnectedUnexpectedly(EndpointName, error);
+                    }
+                }
+                
+                OnDisconnected(new DisconnectedEventArgs(
+                    DateTime.UtcNow,
+                    isGraceful: isGraceful,
+                    error: error));
+            }
+        }, TaskScheduler.Default);
+    }
+    
     /// <summary>
     /// Raises the Connected event.
     /// </summary>
@@ -345,10 +356,7 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
         catch (Exception ex)
         {
             // Log but don't throw - event handlers shouldn't break the connection
-            if (_logger.IsEnabled(LogLevel.Warning))
-            {
-                _logger.LogWarning(ex, "Error in Connected event handler for {EndpointName}", EndpointName);
-            }
+            LogEventHandlerError("Connected", EndpointName, ex);
         }
     }
 
@@ -369,10 +377,7 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
         catch (Exception ex)
         {
             // Log but don't throw - event handlers shouldn't break the disconnection
-            if (_logger.IsEnabled(LogLevel.Warning))
-            {
-                _logger.LogWarning(ex, "Error in Disconnected event handler for {EndpointName}", EndpointName);
-            }
+            LogEventHandlerError("Disconnected", EndpointName, ex);
         }
     }
 
@@ -388,10 +393,7 @@ internal sealed partial class McpClient : McpEndpoint, IMcpClient
         catch (Exception ex)
         {
             // Log but don't throw - event handlers shouldn't break the error handling
-            if (_logger.IsEnabled(LogLevel.Warning))
-            {
-                _logger.LogWarning(ex, "Error in ConnectionError event handler for {EndpointName}", EndpointName);
-            }
+            LogEventHandlerError("ConnectionError", EndpointName, ex);
         }
     }
 }

@@ -22,6 +22,24 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
     }
 
     /// <inheritdoc/>
+    public override bool IsAlive
+    {
+        get
+        {
+            try
+            {
+                // Check if the process is still running
+                return base.IsAlive && !_process.HasExited;
+            }
+            catch
+            {
+                // If we can't check the process state, assume it's not alive
+                return false;
+            }
+        }
+    }
+
+    /// <inheritdoc/>
     public override async Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
     {
         try
