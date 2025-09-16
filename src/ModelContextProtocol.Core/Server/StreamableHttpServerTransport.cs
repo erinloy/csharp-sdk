@@ -88,7 +88,14 @@ public sealed class StreamableHttpServerTransport : ITransport
         }
 
         // We do not need to reference _disposeCts like in HandlePostRequest, because the session ending completes the _sseWriter gracefully.
-        await _sseWriter.WriteAllAsync(sseResponseStream, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _sseWriter.WriteAllAsync(sseResponseStream, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal client disconnect for SSE connections - don't propagate as unhandled exception
+        }
     }
 
     /// <summary>

@@ -97,7 +97,15 @@ internal sealed class StreamableHttpHandler(
         // will be sent in response to a different POST request. It might be a while before we send a message
         // over this response body.
         await context.Response.Body.FlushAsync(context.RequestAborted);
-        await session.Transport.HandleGetRequest(context.Response.Body, context.RequestAborted);
+
+        try
+        {
+            await session.Transport.HandleGetRequest(context.Response.Body, context.RequestAborted);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal client disconnect for SSE - don't log as unhandled exception
+        }
     }
 
     public async Task HandleDeleteRequestAsync(HttpContext context)
