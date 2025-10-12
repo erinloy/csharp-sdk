@@ -158,7 +158,7 @@ public class MapMcpStreamableHttpTests(ITestOutputHelper outputHelper) : MapMcpT
         {
             return async context =>
             {
-                if (!StringValues.IsNullOrEmpty(context.Request.Headers["mcp-session-id"]))
+                if (!StringValues.IsNullOrEmpty(context.Request.Headers["mcp-protocol-version"]))
                 {
                     protocolVersionHeaderValues.Add(context.Request.Headers["mcp-protocol-version"]);
                 }
@@ -171,16 +171,20 @@ public class MapMcpStreamableHttpTests(ITestOutputHelper outputHelper) : MapMcpT
 
         await app.StartAsync(TestContext.Current.CancellationToken);
 
-        await using (var mcpClient = await ConnectAsync(clientOptions: new()
+        await using var mcpClient = await ConnectAsync(clientOptions: new()
         {
             ProtocolVersion = "2025-03-26",
-        }))
-        {
-            await mcpClient.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
-        }
+        });
 
-        // The header should be included in the GET request, the initialized notification, the tools/list call, and the delete request.
-        Assert.NotEmpty(protocolVersionHeaderValues);
+        Assert.Equal("2025-03-26", mcpClient.NegotiatedProtocolVersion);
+        await mcpClient.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        await mcpClient.DisposeAsync();
+
+        // The GET request might not have started in time, and the DELETE request won't be sent in
+        // Stateless mode due to the lack of an Mcp-Session-Id, but the header should be included in the
+        // initialized notification and the tools/list call at a minimum.
+        Assert.True(protocolVersionHeaderValues.Count > 1);
         Assert.All(protocolVersionHeaderValues, v => Assert.Equal("2025-03-26", v));
     }
 }

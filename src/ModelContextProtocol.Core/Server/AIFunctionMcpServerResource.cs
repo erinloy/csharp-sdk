@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -17,6 +18,7 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
 {
     private readonly Regex? _uriParser;
     private readonly string[] _templateVariableNames = [];
+    private readonly IReadOnlyList<object> _metadata;
 
     /// <summary>
     /// Creates an <see cref="AIFunctionMcpServerResource"/> instance for a method, specified via a <see cref="Delegate"/> instance.
@@ -216,9 +218,10 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
             Title = options?.Title,
             Description = options?.Description,
             MimeType = options?.MimeType ?? "application/octet-stream",
+            Icons = options?.Icons,
         };
 
-        return new AIFunctionMcpServerResource(function, resource);
+        return new AIFunctionMcpServerResource(function, resource, options?.Metadata ?? []);
     }
 
     private static McpServerResourceCreateOptions DeriveOptions(MemberInfo member, McpServerResourceCreateOptions? options)
@@ -231,11 +234,23 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
             newOptions.Name ??= resourceAttr.Name;
             newOptions.Title ??= resourceAttr.Title;
             newOptions.MimeType ??= resourceAttr.MimeType;
+
+            // Handle icon from attribute if not already specified in options
+            if (newOptions.Icons is null && resourceAttr.IconSource is { Length: > 0 } iconSource)
+            {
+                newOptions.Icons = [new() { Source = iconSource }];
+            }
         }
 
         if (member.GetCustomAttribute<DescriptionAttribute>() is { } descAttr)
         {
             newOptions.Description ??= descAttr.Description;
+        }
+
+        // Set metadata if not already provided and the member is a MethodInfo
+        if (member is MethodInfo method)
+        {
+            newOptions.Metadata ??= AIFunctionMcpServerTool.CreateMetadata(method);
         }
 
         return newOptions;
@@ -270,11 +285,13 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
     internal AIFunction AIFunction { get; }
 
     /// <summary>Initializes a new instance of the <see cref="McpServerResource"/> class.</summary>
-    private AIFunctionMcpServerResource(AIFunction function, ResourceTemplate resourceTemplate)
+    private AIFunctionMcpServerResource(AIFunction function, ResourceTemplate resourceTemplate, IReadOnlyList<object> metadata)
     {
         AIFunction = function;
         ProtocolResourceTemplate = resourceTemplate;
+        ProtocolResourceTemplate.McpServerResource = this;
         ProtocolResource = resourceTemplate.AsResource();
+        _metadata = metadata;
 
         if (ProtocolResource is null)
         {
@@ -288,6 +305,9 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
 
     /// <inheritdoc />
     public override Resource? ProtocolResource { get; }
+
+    /// <inheritdoc />
+    public override IReadOnlyList<object> Metadata => _metadata;
 
     /// <inheritdoc />
     public override async ValueTask<ReadResourceResult?> ReadAsync(
@@ -316,7 +336,7 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
         }
 
         // Build up the arguments for the AIFunction call, including all of the name/value pairs from the URI.
-        request.Services = new RequestServiceProvider<ReadResourceRequestParams>(request, request.Services);
+        request.Services = new RequestServiceProvider<ReadResourceRequestParams>(request);
         AIFunctionArguments arguments = new() { Services = request.Services };
 
         // For templates, populate the arguments from the URI template.

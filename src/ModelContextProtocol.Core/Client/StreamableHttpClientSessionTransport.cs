@@ -17,7 +17,7 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
     private static readonly MediaTypeWithQualityHeaderValue s_textEventStreamMediaType = new("text/event-stream");
 
     private readonly McpHttpClient _httpClient;
-    private readonly SseClientTransportOptions _options;
+    private readonly HttpClientTransportOptions _options;
     private readonly CancellationTokenSource _connectionCts;
     private readonly ILogger _logger;
 
@@ -31,7 +31,7 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
 
     public StreamableHttpClientSessionTransport(
         string endpointName,
-        SseClientTransportOptions transportOptions,
+        HttpClientTransportOptions transportOptions,
         McpHttpClient httpClient,
         Channel<JsonRpcMessage>? messageChannel,
         ILoggerFactory? loggerFactory)
@@ -43,10 +43,10 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
         _options = transportOptions;
         _httpClient = httpClient;
         _connectionCts = new CancellationTokenSource();
-        _logger = (ILogger?)loggerFactory?.CreateLogger<SseClientTransport>() ?? NullLogger.Instance;
+        _logger = (ILogger?)loggerFactory?.CreateLogger<HttpClientTransport>() ?? NullLogger.Instance;
 
         // We connect with the initialization request with the MCP transport. This means that any errors won't be observed
-        // until the first call to SendMessageAsync. Fortunately, that happens internally in McpClientFactory.ConnectAsync
+        // until the first call to SendMessageAsync. Fortunately, that happens internally in McpClient.ConnectAsync
         // so we still throw any connection-related Exceptions from there and never expose a pre-connected client to the user.
         SetConnected();
     }
@@ -245,16 +245,27 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
         request.Headers.Accept.Add(s_textEventStreamMediaType);
         CopyAdditionalHeaders(request.Headers, _options.AdditionalHeaders, SessionId, _negotiatedProtocolVersion);
 
-        using var response = await _httpClient.SendAsync(request, message: null, _connectionCts.Token).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        // Server support for the GET request is optional. If it fails, we don't care. It just means we won't receive unsolicited messages.
+        HttpResponseMessage response;
+        try
         {
-            // Server support for the GET request is optional. If it fails, we don't care. It just means we won't receive unsolicited messages.
+            response = await _httpClient.SendAsync(request, message: null, _connectionCts.Token).ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
             return;
         }
 
-        using var responseStream = await response.Content.ReadAsStreamAsync(_connectionCts.Token).ConfigureAwait(false);
-        await ProcessSseResponseAsync(responseStream, relatedRpcRequest: null, _connectionCts.Token).ConfigureAwait(false);
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            using var responseStream = await response.Content.ReadAsStreamAsync(_connectionCts.Token).ConfigureAwait(false);
+            await ProcessSseResponseAsync(responseStream, relatedRpcRequest: null, _connectionCts.Token).ConfigureAwait(false);
+        }
     }
 
     private async Task<JsonRpcMessageWithId?> ProcessSseResponseAsync(Stream responseStream, JsonRpcRequest? relatedRpcRequest, CancellationToken cancellationToken)
@@ -361,7 +372,7 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
         {
             if (!headers.TryAddWithoutValidation(header.Key, header.Value))
             {
-                throw new InvalidOperationException($"Failed to add header '{header.Key}' with value '{header.Value}' from {nameof(SseClientTransportOptions.AdditionalHeaders)}.");
+                throw new InvalidOperationException($"Failed to add header '{header.Key}' with value '{header.Value}' from {nameof(HttpClientTransportOptions.AdditionalHeaders)}.");
             }
         }
     }
