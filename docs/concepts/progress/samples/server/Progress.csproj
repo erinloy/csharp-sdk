@@ -4,10 +4,12 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
+    <ProjectReference Include="../../../../../src/ModelContextProtocol.AspNetCore/ModelContextProtocol.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>

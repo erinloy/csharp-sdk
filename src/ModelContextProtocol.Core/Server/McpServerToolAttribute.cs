@@ -26,7 +26,7 @@ namespace ModelContextProtocol.Server;
 ///   <item>
 ///     <description>
 ///       <see cref="CancellationToken"/> parameters are automatically bound to a <see cref="CancellationToken"/> provided by the
-///       <see cref="IMcpServer"/> and that respects any <see cref="CancelledNotificationParams"/>s sent by the client for this operation's
+///       <see cref="McpServer"/> and that respects any <see cref="CancelledNotificationParams"/>s sent by the client for this operation's
 ///       <see cref="RequestId"/>. The parameter is not included in the generated JSON schema.
 ///     </description>
 ///   </item>
@@ -38,7 +38,7 @@ namespace ModelContextProtocol.Server;
 ///   </item>
 ///   <item>
 ///     <description>
-///       <see cref="IMcpServer"/> parameters are not included in the JSON schema and are bound directly to the <see cref="IMcpServer"/>
+///       <see cref="McpServer"/> parameters are not included in the JSON schema and are bound directly to the <see cref="McpServer"/>
 ///       instance associated with this request's <see cref="RequestContext{CallToolRequestParams}"/>. Such parameters may be used to understand
 ///       what server is being used to process the request, and to interact with the client issuing the request to that server.
 ///     </description>
@@ -254,4 +254,19 @@ public sealed class McpServerToolAttribute : Attribute
     /// </para>
     /// </remarks>
     public bool UseStructuredContent { get; set; }
+
+    /// <summary>
+    /// Gets or sets the source URI for the tool's icon.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This can be an HTTP/HTTPS URL pointing to an image file or a data URI with base64-encoded image data.
+    /// When specified, a single icon will be added to the tool.
+    /// </para>
+    /// <para>
+    /// For more advanced icon configuration (multiple icons, MIME type specification, size characteristics),
+    /// use <see cref="McpServerToolCreateOptions.Icons"/> when creating the tool programmatically.
+    /// </para>
+    /// </remarks>
+    public string? IconSource { get; set; }
 }

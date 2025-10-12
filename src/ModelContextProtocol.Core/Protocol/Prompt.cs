@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using ModelContextProtocol.Server;
 
 namespace ModelContextProtocol.Protocol;
 
@@ -52,6 +53,15 @@ public sealed class Prompt : IBaseMetadata
     public IList<PromptArgument>? Arguments { get; set; }
 
     /// <summary>
+    /// Gets or sets an optional list of icons for this prompt.
+    /// </summary>
+    /// <remarks>
+    /// This can be used by clients to display the prompt's icon in a user interface.
+    /// </remarks>
+    [JsonPropertyName("icons")]
+    public IList<Icon>? Icons { get; set; }
+
+    /// <summary>
     /// Gets or sets metadata reserved by MCP for protocol-level metadata.
     /// </summary>
     /// <remarks>
@@ -59,4 +69,10 @@ public sealed class Prompt : IBaseMetadata
     /// </remarks>
     [JsonPropertyName("_meta")]
     public JsonObject? Meta { get; set; }
+
+    /// <summary>
+    /// Gets or sets the callable server prompt corresponding to this metadata if any.
+    /// </summary>
+    [JsonIgnore]
+    public McpServerPrompt? McpServerPrompt { get; set; }
 }

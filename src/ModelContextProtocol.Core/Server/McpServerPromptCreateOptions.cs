@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using ModelContextProtocol.Protocol;
 using System.ComponentModel;
 using System.Text.Json;
 
@@ -69,6 +70,23 @@ public sealed class McpServerPromptCreateOptions
     public AIJsonSchemaCreateOptions? SchemaCreateOptions { get; set; }
 
     /// <summary>
+    /// Gets or sets the metadata associated with the prompt.
+    /// </summary>
+    /// <remarks>
+    /// Metadata includes information such as the attributes extracted from the method and its declaring class.
+    /// If not provided, metadata will be automatically generated for methods created via reflection.
+    /// </remarks>
+    public IReadOnlyList<object>? Metadata { get; set; }
+
+    /// <summary>
+    /// Gets or sets the icons for this prompt.
+    /// </summary>
+    /// <remarks>
+    /// This can be used by clients to display the prompt's icon in a user interface.
+    /// </remarks>
+    public IList<Icon>? Icons { get; set; }
+
+    /// <summary>
     /// Creates a shallow clone of the current <see cref="McpServerPromptCreateOptions"/> instance.
     /// </summary>
     internal McpServerPromptCreateOptions Clone() =>
@@ -80,5 +98,7 @@ public sealed class McpServerPromptCreateOptions
             Description = Description,
             SerializerOptions = SerializerOptions,
             SchemaCreateOptions = SchemaCreateOptions,
+            Metadata = Metadata,
+            Icons = Icons,
         };
 }
