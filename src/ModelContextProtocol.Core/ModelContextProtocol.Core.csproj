@@ -27,6 +27,11 @@
     <PackageReference Include="System.Threading.Channels" />
   </ItemGroup>
 
+  <!-- Suppress CS0436 for netstandard2.0: Internal JsonStringEnumMemberNameAttribute conflicts with System.Text.Json 9.x -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <NoWarn>$(NoWarn);0436</NoWarn>
+  </PropertyGroup>
+
   <!-- Dependencies only needed by netstandard2.0 or net8.0 -->
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net8.0'">
     <PackageReference Include="System.IO.Pipelines" />

@@ -19,6 +19,31 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
         _process = process;
         _options = options;
         _stderrRollingLog = stderrRollingLog;
+
+        // Monitor process exit to proactively detect disconnection
+        // This ensures the Disconnected event fires when the stdio process exits,
+        // not just when we try to send a message and fail
+        if (process.EnableRaisingEvents)
+        {
+            process.Exited += async (sender, e) =>
+            {
+                // Process has exited - trigger disconnection cleanup
+                // Use Task.Run to avoid blocking the Exited event handler
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // CleanupAsync will detect the process exit and raise the Disconnected event
+                        await CleanupAsync(null, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Ignore errors during proactive cleanup
+                        // The disconnection will be handled when the next operation occurs
+                    }
+                });
+            };
+        }
     }
 
     /// <inheritdoc/>
