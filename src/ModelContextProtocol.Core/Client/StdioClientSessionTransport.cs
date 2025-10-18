@@ -27,7 +27,20 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
         {
             process.Exited += async (sender, e) =>
             {
-                // Process has exited - trigger disconnection cleanup
+                // Process has exited - fire ProcessTerminated event first
+                // This allows consumers (like Nexus) to know the process is gone
+                // BEFORE cleanup starts, enabling them to wait for process termination
+                // before starting reconnection
+                try
+                {
+                    OnProcessTerminated();
+                }
+                catch
+                {
+                    // Ignore errors from event handlers
+                }
+
+                // Then trigger disconnection cleanup
                 // Use Task.Run to avoid blocking the Exited event handler
                 _ = Task.Run(async () =>
                 {

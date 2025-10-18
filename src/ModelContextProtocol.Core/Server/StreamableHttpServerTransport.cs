@@ -144,7 +144,12 @@ public sealed class StreamableHttpServerTransport : ITransport
 
     /// <inheritdoc/>
     public bool IsAlive => !_disposeCts.IsCancellationRequested;
-    
+
+    /// <inheritdoc/>
+#pragma warning disable CS0067 // Event never used (only applicable to stdio transports)
+    public event EventHandler? ProcessTerminated;
+#pragma warning restore CS0067
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {

@@ -58,6 +58,11 @@ public sealed class SseResponseStreamTransport(Stream sseResponseStream, string?
     public bool IsAlive => _isConnected;
 
     /// <inheritdoc/>
+#pragma warning disable CS0067 // Event never used (only applicable to stdio transports)
+    public event EventHandler? ProcessTerminated;
+#pragma warning restore CS0067
+
+    /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
         _isConnected = false;

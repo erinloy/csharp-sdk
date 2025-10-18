@@ -83,7 +83,14 @@ internal sealed class StreamableHttpPostTransport(StreamableHttpServerTransport 
 
     /// <inheritdoc/>
     public bool IsAlive => parentTransport.IsAlive;
-    
+
+    /// <inheritdoc/>
+    public event EventHandler? ProcessTerminated
+    {
+        add => parentTransport.ProcessTerminated += value;
+        remove => parentTransport.ProcessTerminated -= value;
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _sseWriter.DisposeAsync().ConfigureAwait(false);

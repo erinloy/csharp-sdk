@@ -131,6 +131,9 @@ internal sealed partial class McpClientImpl : McpClient
     public override bool IsConnected => !_disposed && _transport.IsAlive;
 
     /// <inheritdoc/>
+    public override ITransport Transport => _transport;
+
+    /// <inheritdoc/>
     public override event EventHandler<ConnectedEventArgs>? Connected;
 
     /// <inheritdoc/>

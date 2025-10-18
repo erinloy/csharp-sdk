@@ -66,4 +66,17 @@ public abstract partial class McpClient : McpSession, IMcpClient
     /// Occurs when a connection error is detected.
     /// </summary>
     public abstract event EventHandler<ConnectionErrorEventArgs>? ConnectionError;
+
+    /// <summary>
+    /// Gets the underlying transport used by this client.
+    /// </summary>
+    /// <remarks>
+    /// Provides access to the transport layer for advanced scenarios such as:
+    /// <list type="bullet">
+    ///   <item>Subscribing to ProcessTerminated events for stdio transports</item>
+    ///   <item>Checking transport-level connection state</item>
+    ///   <item>Accessing transport-specific lifecycle events</item>
+    /// </list>
+    /// </remarks>
+    public abstract ITransport Transport { get; }
 }

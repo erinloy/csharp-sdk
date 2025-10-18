@@ -113,7 +113,14 @@ internal sealed partial class AutoDetectingClientSessionTransport : ITransport
 
     /// <inheritdoc/>
     public bool IsAlive => ActiveTransport?.IsAlive ?? false;
-    
+
+    /// <inheritdoc/>
+    public event EventHandler? ProcessTerminated
+    {
+        add => ActiveTransport!.ProcessTerminated += value;
+        remove => ActiveTransport!.ProcessTerminated -= value;
+    }
+
     public async ValueTask DisposeAsync()
     {
         try

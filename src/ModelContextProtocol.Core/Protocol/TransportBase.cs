@@ -83,6 +83,17 @@ public abstract partial class TransportBase : ITransport
     public virtual bool IsAlive => _state == StateConnected;
 
     /// <inheritdoc/>
+    public virtual event EventHandler? ProcessTerminated;
+
+    /// <summary>
+    /// Raises the <see cref="ProcessTerminated"/> event.
+    /// </summary>
+    protected void OnProcessTerminated()
+    {
+        ProcessTerminated?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <inheritdoc/>
     public abstract ValueTask DisposeAsync();
 
     /// <summary>

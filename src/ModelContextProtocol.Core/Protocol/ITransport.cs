@@ -78,4 +78,20 @@ public interface ITransport : IAsyncDisposable
     /// For other transports, this checks the connection state.
     /// </remarks>
     bool IsAlive { get; }
+
+    /// <summary>
+    /// Occurs when the underlying process for a stdio transport has terminated.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This event is only fired for stdio-based transports when the associated process exits.
+    /// HTTP/SSE transports do not fire this event.
+    /// </para>
+    /// <para>
+    /// The event fires BEFORE the transport cleanup is complete, allowing consumers to know
+    /// the process has exited and prepare for reconnection. The <see cref="IAsyncDisposable.DisposeAsync"/>
+    /// method will handle process cleanup after this event fires.
+    /// </para>
+    /// </remarks>
+    event EventHandler? ProcessTerminated;
 }
