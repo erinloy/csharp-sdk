@@ -109,6 +109,10 @@ public class McpClientCreationTests
         public string? SessionId => null;
         public bool IsAlive => true;
 
+#pragma warning disable CS0067 // Event is never used - this is a test stub
+        public event EventHandler? ProcessTerminated;
+#pragma warning restore CS0067
+
         public ChannelReader<JsonRpcMessage> MessageReader => _channel.Reader;
 
         public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default) => Task.FromResult<ITransport>(this);

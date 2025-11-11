@@ -20,6 +20,10 @@ public class TestServerTransport : ITransport
 
     public string? SessionId => null;
 
+#pragma warning disable CS0067 // Event is never used - this is a test stub
+    public event EventHandler? ProcessTerminated;
+#pragma warning restore CS0067
+
     public TestServerTransport()
     {
         _messageChannel = Channel.CreateUnbounded<JsonRpcMessage>(new UnboundedChannelOptions
