@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable IDE0161 // Convert to file-scoped namespace - not supported in netstandard2.0/net472
+
 // Copied from:
 // https://github.com/dotnet/runtime/blob/dd75c45c123055baacd7aa4418f425f412797a29/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/DefaultInterpolatedStringHandler.cs
 // and then modified to build on netstandard2.0.
