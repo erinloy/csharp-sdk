@@ -62,6 +62,12 @@ internal sealed partial class StreamableHttpClientSessionTransport : TransportBa
     // This is used by the auto transport so it can fall back and try SSE given a non-200 response without catching an exception.
     internal async Task<HttpResponseMessage> SendHttpRequestAsync(JsonRpcMessage message, CancellationToken cancellationToken)
     {
+        // Check if disposed before accessing _connectionCts.Token to prevent ObjectDisposedException
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(StreamableHttpClientSessionTransport), "Cannot send message - transport has been disposed");
+        }
+
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _connectionCts.Token);
         cancellationToken = sendCts.Token;
 
