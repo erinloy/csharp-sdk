@@ -13,19 +13,28 @@ public sealed class Program
 {
     private const int _port = 7029;
     private static readonly string _url = $"https://localhost:{_port}";
+    private static readonly string _clientMetadataDocumentUrl = $"{_url}/client-metadata/cimd-client.json";
 
     // Port 5000 is used by tests and port 7071 is used by the ProtectedMcpServer sample
-    private static readonly string[] ValidResources = ["http://localhost:5000/", "http://localhost:7071/"];
+    // Per MCP spec, URIs should not have trailing slashes unless semantically significant
+    public string[] ValidResources { get; set; } = [
+        "http://localhost:5000",
+        "http://localhost:5000/mcp",
+        "http://localhost:7071"
+    ];
 
     private readonly ConcurrentDictionary<string, AuthorizationCodeInfo> _authCodes = new();
     private readonly ConcurrentDictionary<string, TokenInfo> _tokens = new();
     private readonly ConcurrentDictionary<string, ClientInfo> _clients = new();
+
+    private readonly ConcurrentQueue<string> _metadataRequests = new();
 
     private readonly RSA _rsa;
     private readonly string _keyId;
 
     private readonly ILoggerProvider? _loggerProvider;
     private readonly IConnectionListenerFactory? _kestrelTransport;
+    private readonly TaskCompletionSource _serverStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Program"/> class with logging and transport parameters.
@@ -40,9 +49,37 @@ public sealed class Program
         _kestrelTransport = kestrelTransport;
     }
 
+    /// <summary>
+    /// Gets a task that completes when the server has started and is ready to accept connections.
+    /// </summary>
+    public Task ServerStarted => _serverStarted.Task;
+
     // Track if we've already issued an already-expired token for the CanAuthenticate_WithTokenRefresh test which uses the test-refresh-client registration.
-    public bool HasIssuedExpiredToken { get; set; }
-    public bool HasIssuedRefreshToken { get; set; }
+    public bool HasRefreshedToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the authorization server
+    /// advertises support for client ID metadata documents in its discovery
+    /// document. This is used by tests to toggle CIMD support.
+    /// </summary>
+    /// <remarks>
+    /// The default value is <c>true</c>.
+    /// </remarks>
+    public bool ClientIdMetadataDocumentSupported { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the authorization server expects a resource parameter.
+    /// When <c>true</c>, the resource parameter must be present and match a valid resource.
+    /// When <c>false</c>, the resource parameter must be absent to simulate legacy servers that
+    /// do not support RFC 8707 resource indicators.
+    /// </summary>
+    /// <remarks>
+    /// The default value is <c>true</c>.
+    /// </remarks>
+    public bool ExpectResource { get; set; } = true;
+
+    public HashSet<string> DisabledMetadataPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyCollection<string> MetadataRequests => _metadataRequests.ToArray();
 
     /// <summary>
     /// Entry point for the application.
@@ -96,63 +133,87 @@ public sealed class Program
 
         var app = builder.Build();
 
-        app.UseRouting();
-        app.UseEndpoints(_ => { });
-
-        // Set up the demo client
         var clientId = "demo-client";
         var clientSecret = "demo-secret";
+
         _clients[clientId] = new ClientInfo
         {
             ClientId = clientId,
             ClientSecret = clientSecret,
+
+            RequiresClientSecret = true,
             RedirectUris = ["http://localhost:1179/callback"],
         };
 
-        // When this client ID is used, the first token issued will already be expired to make
-        // testing the refresh flow easier.
-        _clients["test-refresh-client"] = new ClientInfo
+        // This client is pre-registered to support testing Client ID Metadata Documents (CIMD).
+        // A non-test OAuth server implementation would fetch the metadata document from the client-specified
+        // URL during authorization, but we just register the client here to keep the test implementation simple.
+        // We also set 'RequiresClientSecret' to 'false' here because client secrets are disallowed when using CIMD.
+        // See https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00#section-4.1
+        _clients[_clientMetadataDocumentUrl] = new ClientInfo
         {
-            ClientId = "test-refresh-client",
-            ClientSecret = "test-refresh-secret",
+            ClientId = _clientMetadataDocumentUrl,
+
+            RequiresClientSecret = false,
             RedirectUris = ["http://localhost:1179/callback"],
         };
 
         // The MCP spec tells the client to use /.well-known/oauth-authorization-server but AddJwtBearer looks for
-        // /.well-known/openid-configuration by default. To make things easier, we support both with the same response
-        // which seems to be common. Ex. https://github.com/keycloak/keycloak/pull/29628
+        // /.well-known/openid-configuration by default.
         //
         // The requirements for these endpoints are at https://www.rfc-editor.org/rfc/rfc8414 and
         // https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata respectively.
         // They do differ, but it's close enough at least for our current testing to use the same response for both.
         // See https://gist.github.com/localden/26d8bcf641703c08a5d8741aa9c3336c
-        string[] metadataEndpoints = ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"];
-        foreach (var metadataEndpoint in metadataEndpoints)
+        IResult HandleMetadataRequest(HttpContext context, string? issuerPath = null)
         {
-            // OAuth 2.0 Authorization Server Metadata (RFC 8414)
-            app.MapGet(metadataEndpoint, () =>
-            {
-                var metadata = new OAuthServerMetadata
-                {
-                    Issuer = _url,
-                    AuthorizationEndpoint = $"{_url}/authorize",
-                    TokenEndpoint = $"{_url}/token",
-                    JwksUri = $"{_url}/.well-known/jwks.json",
-                    ResponseTypesSupported = ["code"],
-                    SubjectTypesSupported = ["public"],
-                    IdTokenSigningAlgValuesSupported = ["RS256"],
-                    ScopesSupported = ["openid", "profile", "email", "mcp:tools"],
-                    TokenEndpointAuthMethodsSupported = ["client_secret_post"],
-                    ClaimsSupported = ["sub", "iss", "name", "email", "aud"],
-                    CodeChallengeMethodsSupported = ["S256"],
-                    GrantTypesSupported = ["authorization_code", "refresh_token"],
-                    IntrospectionEndpoint = $"{_url}/introspect",
-                    RegistrationEndpoint = $"{_url}/register"
-                };
+            _metadataRequests.Enqueue(context.Request.Path);
 
-                return Results.Ok(metadata);
-            });
+            if (DisabledMetadataPaths.Contains(context.Request.Path))
+            {
+                return Results.NotFound();
+            }
+
+            if (!string.IsNullOrEmpty(issuerPath))
+            {
+                issuerPath = $"/{issuerPath}";
+            }
+
+            var metadata = new OAuthServerMetadata
+            {
+                Issuer = $"{_url}{issuerPath}",
+                AuthorizationEndpoint = $"{_url}/authorize",
+                TokenEndpoint = $"{_url}/token",
+                JwksUri = $"{_url}/.well-known/jwks.json",
+                ResponseTypesSupported = ["code"],
+                SubjectTypesSupported = ["public"],
+                IdTokenSigningAlgValuesSupported = ["RS256"],
+                ScopesSupported = ["openid", "profile", "email", "mcp:tools"],
+                TokenEndpointAuthMethodsSupported = ["client_secret_post"],
+                ClaimsSupported = ["sub", "iss", "name", "email", "aud"],
+                CodeChallengeMethodsSupported = ["S256"],
+                GrantTypesSupported = ["authorization_code", "refresh_token"],
+                IntrospectionEndpoint = $"{_url}/introspect",
+                RegistrationEndpoint = $"{_url}/register",
+                ClientIdMetadataDocumentSupported = ClientIdMetadataDocumentSupported,
+            };
+
+            return Results.Ok(metadata);
         }
+
+        app.MapGet("/.well-known/oauth-authorization-server", HandleMetadataRequest);
+        app.MapGet("/.well-known/openid-configuration", HandleMetadataRequest);
+        app.MapGet("/.well-known/oauth-authorization-server/{**issuerPath}", HandleMetadataRequest);
+        app.MapGet("/.well-known/openid-configuration/{**issuerPath}", HandleMetadataRequest);
+        app.MapGet("/{**fullPath}", (HttpContext context, string fullPath) =>
+        {
+            if (fullPath.EndsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase))
+            {
+                return HandleMetadataRequest(context, fullPath[..^"/.well-known/openid-configuration".Length]);
+            }
+
+            return Results.NotFound();
+        });
 
         // JWKS endpoint to expose the public key
         app.MapGet("/.well-known/jwks.json", () =>
@@ -239,8 +300,9 @@ public sealed class Program
                 return Results.Redirect($"{redirect_uri}?error=invalid_request&error_description=Only+S256+code_challenge_method+is+supported&state={state}");
             }
 
-            // Validate resource in accordance with RFC 8707
-            if (string.IsNullOrEmpty(resource) || !ValidResources.Contains(resource))
+            // Validate resource in accordance with RFC 8707.
+            // When ExpectResource is false, the resource parameter must be absent (legacy mode).
+            if (ExpectResource ? (string.IsNullOrEmpty(resource) || !ValidResources.Contains(resource)) : !string.IsNullOrEmpty(resource))
             {
                 return Results.Redirect($"{redirect_uri}?error=invalid_target&error_description=The+specified+resource+is+not+valid&state={state}");
             }
@@ -286,9 +348,10 @@ public sealed class Program
                     type: "https://tools.ietf.org/html/rfc6749#section-5.2");
             }
 
-            // Validate resource in accordance with RFC 8707
+            // Validate resource in accordance with RFC 8707.
+            // When ExpectResource is false, the resource parameter must be absent (legacy mode).
             var resource = form["resource"].ToString();
-            if (string.IsNullOrEmpty(resource) || !ValidResources.Contains(resource))
+            if (ExpectResource ? (string.IsNullOrEmpty(resource) || !ValidResources.Contains(resource)) : !string.IsNullOrEmpty(resource))
             {
                 return Results.BadRequest(new OAuthErrorResponse
                 {
@@ -371,7 +434,7 @@ public sealed class Program
                     _tokens.TryRemove(refresh_token, out _);
                 }
 
-                HasIssuedRefreshToken = true;
+                HasRefreshedToken = true;
                 return Results.Ok(response);
             }
             else
@@ -471,6 +534,7 @@ public sealed class Program
             _clients[clientId] = new ClientInfo
             {
                 ClientId = clientId,
+                RequiresClientSecret = true,
                 ClientSecret = clientSecret,
                 RedirectUris = registrationRequest.RedirectUris,
             };
@@ -497,7 +561,20 @@ public sealed class Program
         Console.WriteLine($"Demo Client ID: {clientId}");
         Console.WriteLine($"Demo Client Secret: {clientSecret}");
 
-        await app.RunAsync(cancellationToken);
+        await app.StartAsync(cancellationToken);
+        _serverStarted.TrySetResult();
+
+        // Wait until cancellation is requested
+        try
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancellation is requested
+        }
+
+        await app.StopAsync();
     }
 
     /// <summary>
@@ -511,17 +588,17 @@ public sealed class Program
         var clientId = form["client_id"].ToString();
         var clientSecret = form["client_secret"].ToString();
 
-        if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret))
+        if (string.IsNullOrEmpty(clientId) || !_clients.TryGetValue(clientId, out var client))
         {
             return null;
         }
 
-        if (_clients.TryGetValue(clientId, out var client) && client.ClientSecret == clientSecret)
+        if (client.RequiresClientSecret && client.ClientSecret != clientSecret)
         {
-            return client;
+            return null;
         }
 
-        return null;
+        return client;
     }
 
     /// <summary>
@@ -535,14 +612,6 @@ public sealed class Program
     {
         var expiresIn = TimeSpan.FromHours(1);
         var issuedAt = DateTimeOffset.UtcNow;
-
-        // For test-refresh-client, make the first token expired to test refresh functionality.
-        if (clientId == "test-refresh-client" && !HasIssuedExpiredToken)
-        {
-            HasIssuedExpiredToken = true;
-            expiresIn = TimeSpan.FromHours(-1);
-        }
-
         var expiresAt = issuedAt.Add(expiresIn);
         var jwtId = Guid.NewGuid().ToString();
 
@@ -551,7 +620,7 @@ public sealed class Program
         {
             { "alg", "RS256" },
             { "typ", "JWT" },
-            { "kid", _keyId }
+            { "kid", _keyId },
         };
 
         var payload = new Dictionary<string, string>
@@ -564,7 +633,7 @@ public sealed class Program
             { "jti", jwtId },
             { "iat", issuedAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) },
             { "exp", expiresAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) },
-            { "scope", string.Join(" ", scopes) }
+            { "scope", string.Join(" ", scopes) },
         };
 
         // Create JWT token

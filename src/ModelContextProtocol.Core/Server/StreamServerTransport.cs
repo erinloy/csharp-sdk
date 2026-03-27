@@ -36,8 +36,7 @@ public class StreamServerTransport : TransportBase
     /// <param name="outputStream">The output <see cref="Stream"/> to use as standard output.</param>
     /// <param name="serverName">Optional name of the server, used for diagnostic purposes, like logging.</param>
     /// <param name="loggerFactory">Optional logger factory used for logging employed by the transport.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="inputStream"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="outputStream"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="inputStream"/> or <paramref name="outputStream"/> is <see langword="null"/>.</exception>
     public StreamServerTransport(Stream inputStream, Stream outputStream, string? serverName = null, ILoggerFactory? loggerFactory = null)
         : base(serverName is not null ? $"Server (stream) ({serverName})" : "Server (stream)", loggerFactory)
     {
@@ -75,7 +74,9 @@ public class StreamServerTransport : TransportBase
 
         try
         {
-            await JsonSerializer.SerializeAsync(_outputStream, message, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonRpcMessage)), cancellationToken).ConfigureAwait(false);
+            var json = JsonSerializer.SerializeToUtf8Bytes(message, McpJsonUtilities.JsonContext.Default.JsonRpcMessage);
+            LogTransportSendingMessageSensitive(message);
+            await _outputStream.WriteAsync(json, cancellationToken).ConfigureAwait(false);
             await _outputStream.WriteAsync(s_newlineBytes, cancellationToken).ConfigureAwait(false);
             await _outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }

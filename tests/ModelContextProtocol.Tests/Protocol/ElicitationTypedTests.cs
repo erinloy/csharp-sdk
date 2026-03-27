@@ -23,8 +23,8 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             {
                 var result = await request.Server.ElicitAsync<SampleForm>(
                     message: "Please provide more information.",
-                    serializerOptions: ElicitationTypedDefaultJsonContext.Default.Options,
-                    cancellationToken: CancellationToken.None);
+                    options: new() { JsonSerializerOptions = ElicitationTypedDefaultJsonContext.Default.Options },
+                    CancellationToken.None);
 
                 Assert.Equal("accept", result.Action);
                 Assert.NotNull(result.Content);
@@ -38,8 +38,8 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             {
                 var result = await request.Server.ElicitAsync<CamelForm>(
                     message: "Please provide more information.",
-                    serializerOptions: ElicitationTypedCamelJsonContext.Default.Options,
-                    cancellationToken: CancellationToken.None);
+                    options: new() { JsonSerializerOptions = ElicitationTypedCamelJsonContext.Default.Options },
+                    CancellationToken.None);
 
                 Assert.Equal("accept", result.Action);
                 Assert.NotNull(result.Content);
@@ -51,8 +51,8 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             {
                 var result = await request.Server.ElicitAsync<NullablePropertyForm>(
                     message: "Please provide more information.",
-                    serializerOptions: ElicitationNullablePropertyJsonContext.Default.Options,
-                    cancellationToken: CancellationToken.None);
+                    options: new() { JsonSerializerOptions = ElicitationNullablePropertyJsonContext.Default.Options },
+                    CancellationToken.None);
 
                 // Should be unreachable
                 return new CallToolResult
@@ -64,8 +64,8 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             {
                 await request.Server.ElicitAsync<UnsupportedForm>(
                     message: "Please provide more information.",
-                    serializerOptions: ElicitationUnsupportedJsonContext.Default.Options,
-                    cancellationToken: CancellationToken.None);
+                    options: new() { JsonSerializerOptions = ElicitationUnsupportedJsonContext.Default.Options },
+                    CancellationToken.None);
 
                 // Should be unreachable
                 return new CallToolResult
@@ -78,12 +78,25 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                 // This should throw because T is not an object type with properties (string primitive)
                 await request.Server.ElicitAsync<string>(
                     message: "Any message",
-                    serializerOptions: McpJsonUtilities.DefaultOptions,
-                    cancellationToken: CancellationToken.None);
+                    options: new() { JsonSerializerOptions = McpJsonUtilities.DefaultOptions },
+                    CancellationToken.None);
 
                 return new CallToolResult
                 {
                     Content = [new TextContentBlock { Text = "unexpected" }],
+                };
+            }
+            else if (request.Params!.Name == "TestElicitationWithDefaults")
+            {
+                var result = await request.Server.ElicitAsync<FormWithDefaults>(
+                    message: "Please provide information.",
+                    options: new() { JsonSerializerOptions = ElicitationDefaultsJsonContext.Default.Options },
+                    CancellationToken.None);
+
+                // The test will validate the schema in the client handler
+                return new CallToolResult
+                {
+                    Content = [new TextContentBlock { Text = "success" }],
                 };
             }
             else
@@ -110,6 +123,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                     Assert.NotNull(request);
                     Assert.Equal("Please provide more information.", request.Message);
 
+                    Assert.NotNull(request.RequestedSchema);
                     Assert.Equal(6, request.RequestedSchema.Properties.Count);
 
                     foreach (var entry in request.RequestedSchema.Properties)
@@ -134,7 +148,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                                 break;
 
                             case nameof(SampleForm.Role):
-                                var enumSchema = Assert.IsType<ElicitRequestParams.EnumSchema>(value);
+                                var enumSchema = Assert.IsType<ElicitRequestParams.UntitledSingleSelectEnumSchema>(value);
                                 Assert.Equal("string", enumSchema.Type);
                                 Assert.Equal([nameof(SampleRole.User), nameof(SampleRole.Admin)], enumSchema.Enum);
                                 break;
@@ -162,24 +176,24 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                         Action = "accept",
                         Content = new Dictionary<string, JsonElement>
                         {
-                            [nameof(SampleForm.Name)] = (JsonElement)JsonSerializer.Deserialize("""
+                            [nameof(SampleForm.Name)] = JsonElement.Parse("""
                                 "Alice"
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            [nameof(SampleForm.Age)] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            [nameof(SampleForm.Age)] = JsonElement.Parse("""
                                 30
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            [nameof(SampleForm.Active)] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            [nameof(SampleForm.Active)] = JsonElement.Parse("""
                                 true
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            [nameof(SampleForm.Role)] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            [nameof(SampleForm.Role)] = JsonElement.Parse("""
                                 "Admin"
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            [nameof(SampleForm.Score)] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            [nameof(SampleForm.Score)] = JsonElement.Parse("""
                                 99.5
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            [nameof(SampleForm.Created)] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            [nameof(SampleForm.Created)] = JsonElement.Parse("""
                                 "2023-08-27T03:05:00"
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
+                                """),
                         },
                     };
                 },
@@ -204,6 +218,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                     Assert.Equal("Please provide more information.", request.Message);
 
                     // Expect camelCase names based on serializer options
+                    Assert.NotNull(request.RequestedSchema);
                     Assert.Contains("firstName", request.RequestedSchema.Properties.Keys);
                     Assert.Contains("zipCode", request.RequestedSchema.Properties.Keys);
                     Assert.Contains("isAdmin", request.RequestedSchema.Properties.Keys);
@@ -213,15 +228,15 @@ public partial class ElicitationTypedTests : ClientServerTestBase
                         Action = "accept",
                         Content = new Dictionary<string, JsonElement>
                         {
-                            ["firstName"] = (JsonElement)JsonSerializer.Deserialize("""
+                            ["firstName"] = JsonElement.Parse("""
                                 "Bob"
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            ["zipCode"] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            ["zipCode"] = JsonElement.Parse("""
                                 90210
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
-                            ["isAdmin"] = (JsonElement)JsonSerializer.Deserialize("""
+                                """),
+                            ["isAdmin"] = JsonElement.Parse("""
                                 false
-                                """, McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonElement)))!,
+                                """),
                         },
                     };
                 },
@@ -248,7 +263,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             },
         });
 
-        var ex = await Assert.ThrowsAsync<McpException>(async() =>
+        var ex = await Assert.ThrowsAsync<McpProtocolException>(async() =>
             await client.CallToolAsync("TestElicitationUnsupportedType", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(typeof(UnsupportedForm.Nested).FullName!, ex.Message);
@@ -270,7 +285,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             }
         });
 
-        var ex = await Assert.ThrowsAsync<McpException>(async () =>
+        var ex = await Assert.ThrowsAsync<McpProtocolException>(async () =>
             await client.CallToolAsync("TestElicitationNullablePropertyForm", cancellationToken: TestContext.Current.CancellationToken));
     }
 
@@ -290,14 +305,13 @@ public partial class ElicitationTypedTests : ClientServerTestBase
             }
         });
 
-        var ex = await Assert.ThrowsAsync<McpException>(async () =>
+        var ex = await Assert.ThrowsAsync<McpProtocolException>(async () =>
             await client.CallToolAsync("TestElicitationNonObjectGenericType", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(typeof(string).FullName!, ex.Message);
     }
 
-    [JsonConverter(typeof(CustomizableJsonStringEnumConverter<SampleRole>))]
-
+    [JsonConverter(typeof(JsonStringEnumConverter<SampleRole>))]
     public enum SampleRole
     {
         User,
@@ -312,7 +326,7 @@ public partial class ElicitationTypedTests : ClientServerTestBase
         public SampleRole Role { get; set; }
         public double Score { get; set; }
 
-        
+
         public DateTime Created { get; set; }
     }
 
@@ -360,4 +374,80 @@ public partial class ElicitationTypedTests : ClientServerTestBase
     [JsonSerializable(typeof(UnsupportedForm.Nested))]
     [JsonSerializable(typeof(JsonElement))]
     internal partial class ElicitationUnsupportedJsonContext : JsonSerializerContext;
+
+    public sealed record FormWithDefaults(
+        string Name = "John Doe",
+        int Age = 30,
+        double Score = 85.5,
+        bool IsActive = true,
+        string Status = "active"
+    );
+
+    [JsonSerializable(typeof(FormWithDefaults))]
+    [JsonSerializable(typeof(JsonElement))]
+    internal partial class ElicitationDefaultsJsonContext : JsonSerializerContext;
+
+    [Fact(Skip = "Requires AIJsonUtilities to support extracting default values from optional parameters")]
+    public async Task Elicit_Typed_With_Defaults_Maps_To_Schema_Defaults()
+    {
+        await using McpClient client = await CreateMcpClientForServer(new McpClientOptions
+        {
+            Handlers = new()
+            {
+                ElicitationHandler = async (request, cancellationToken) =>
+                {
+                    Assert.NotNull(request);
+                    Assert.Equal("Please provide information.", request.Message);
+
+                    Assert.NotNull(request.RequestedSchema);
+                    Assert.Equal(5, request.RequestedSchema.Properties.Count);
+
+                    // Verify that default values from the type are mapped to the schema
+                    foreach (var entry in request.RequestedSchema.Properties)
+                    {
+                        switch (entry.Key)
+                        {
+                            case nameof(FormWithDefaults.Name):
+                                var nameSchema = Assert.IsType<ElicitRequestParams.StringSchema>(entry.Value);
+                                Assert.Equal("John Doe", nameSchema.Default);
+                                break;
+
+                            case nameof(FormWithDefaults.Age):
+                                var ageSchema = Assert.IsType<ElicitRequestParams.NumberSchema>(entry.Value);
+                                Assert.Equal(30, ageSchema.Default);
+                                break;
+
+                            case nameof(FormWithDefaults.Score):
+                                var scoreSchema = Assert.IsType<ElicitRequestParams.NumberSchema>(entry.Value);
+                                Assert.Equal(85.5, scoreSchema.Default);
+                                break;
+
+                            case nameof(FormWithDefaults.IsActive):
+                                var activeSchema = Assert.IsType<ElicitRequestParams.BooleanSchema>(entry.Value);
+                                Assert.True(activeSchema.Default);
+                                break;
+
+                            case nameof(FormWithDefaults.Status):
+                                var statusSchema = Assert.IsType<ElicitRequestParams.StringSchema>(entry.Value);
+                                Assert.Equal("active", statusSchema.Default);
+                                break;
+
+                            default:
+                                Assert.Fail($"Unexpected property: {entry.Key}");
+                                break;
+                        }
+                    }
+
+                    return new ElicitResult
+                    {
+                        Action = "accept",
+                        Content = new Dictionary<string, JsonElement>()
+                    };
+                },
+            }
+        });
+
+        var result = await client.CallToolAsync("TestElicitationWithDefaults", cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("success", (result.Content[0] as TextContentBlock)?.Text);
+    }
 }

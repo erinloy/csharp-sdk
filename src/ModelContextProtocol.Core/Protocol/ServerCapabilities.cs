@@ -1,11 +1,12 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
 using ModelContextProtocol.Server;
 
 namespace ModelContextProtocol.Protocol;
 
 /// <summary>
-/// Represents the capabilities that a server may support.
+/// Represents the capabilities that a server supports.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,7 +38,7 @@ public sealed class ServerCapabilities
     public IDictionary<string, object>? Experimental { get; set; }
 
     /// <summary>
-    /// Gets or sets a server's logging capability, supporting sending log messages to the client.
+    /// Gets or sets a server's logging capability for sending log messages to the client.
     /// </summary>
     [JsonPropertyName("logging")]
     public LoggingCapability? Logging { get; set; }
@@ -66,25 +67,56 @@ public sealed class ServerCapabilities
     [JsonPropertyName("completions")]
     public CompletionsCapability? Completions { get; set; }
 
-    /// <summary>Gets or sets notification handlers to register with the server.</summary>
+    /// <summary>
+    /// Gets or sets a server's tasks capability for supporting task-augmented requests.
+    /// </summary>
     /// <remarks>
     /// <para>
-    /// When constructed, the server will enumerate these handlers once, which may contain multiple handlers per notification method key.
-    /// The server will not re-enumerate the sequence after initialization.
+    /// The tasks capability enables clients to augment their requests with tasks for long-running
+    /// operations. When present, clients can request that certain operations (like tool calls)
+    /// execute asynchronously, with the ability to poll for status and retrieve results later.
     /// </para>
     /// <para>
-    /// Notification handlers allow the server to respond to client-sent notifications for specific methods.
-    /// Each key in the collection is a notification method name, and each value is a callback that will be invoked
-    /// when a notification with that method is received.
-    /// </para>
-    /// <para>
-    /// Handlers provided via <see cref="NotificationHandlers"/> will be registered with the server for the lifetime of the server.
-    /// For transient handlers, <see cref="McpSession.RegisterNotificationHandler"/> may be used to register a handler that can
-    /// then be unregistered by disposing of the <see cref="IAsyncDisposable"/> returned from the method.
+    /// See <see cref="McpTasksCapability"/> for details on configuring which operations support tasks.
     /// </para>
     /// </remarks>
+    [Experimental(Experimentals.Tasks_DiagnosticId, UrlFormat = Experimentals.Tasks_Url)]
     [JsonIgnore]
-    [Obsolete($"Use {nameof(McpServerOptions.Handlers.NotificationHandlers)} instead. This member will be removed in a subsequent release.")] // See: https://github.com/modelcontextprotocol/csharp-sdk/issues/774
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    public IEnumerable<KeyValuePair<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>>? NotificationHandlers { get; set; }
+    public McpTasksCapability? Tasks
+    {
+        get => TasksCore;
+        set => TasksCore = value;
+    }
+
+    // See ExperimentalInternalPropertyTests.cs before modifying this property.
+    [JsonInclude]
+    [JsonPropertyName("tasks")]
+    internal McpTasksCapability? TasksCore { get; set; }
+
+    /// <summary>
+    /// Gets or sets optional MCP extensions that the server supports.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Keys are extension identifiers in reverse domain notation with an extension name
+    /// (e.g., <c>"io.modelcontextprotocol/apps"</c>), and values are per-extension settings
+    /// objects. An empty object indicates support with no additional settings.
+    /// </para>
+    /// <para>
+    /// Extensions provide a framework for extending the Model Context Protocol while maintaining
+    /// interoperability. Servers advertise extension support via this field during the initialization handshake.
+    /// </para>
+    /// </remarks>
+    [Experimental(Experimentals.Extensions_DiagnosticId, UrlFormat = Experimentals.Extensions_Url)]
+    [JsonIgnore]
+    public IDictionary<string, object>? Extensions
+    {
+        get => ExtensionsCore;
+        set => ExtensionsCore = value;
+    }
+
+    // See ExperimentalInternalPropertyTests.cs before modifying this property.
+    [JsonInclude]
+    [JsonPropertyName("extensions")]
+    internal IDictionary<string, object>? ExtensionsCore { get; set; }
 }

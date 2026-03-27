@@ -7,8 +7,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace ModelContextProtocol.Server;
@@ -67,7 +69,7 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
         return Create(
             AIFunctionFactory.Create(method, args =>
             {
-                Debug.Assert(args.Services is RequestServiceProvider<ReadResourceRequestParams>, $"The service provider should be a {nameof(RequestServiceProvider<ReadResourceRequestParams>)} for this method to work correctly.");
+                Debug.Assert(args.Services is RequestServiceProvider<ReadResourceRequestParams>, $"The service provider should be a {nameof(RequestServiceProvider<>)} for this method to work correctly.");
                 return createTargetFunc(((RequestServiceProvider<ReadResourceRequestParams>)args.Services!).Request);
             }, CreateAIFunctionFactoryOptions(method, options)),
             options);
@@ -219,6 +221,9 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
             Description = options?.Description,
             MimeType = options?.MimeType ?? "application/octet-stream",
             Icons = options?.Icons,
+            Meta = function.UnderlyingMethod is not null ?
+                AIFunctionMcpServerTool.CreateMetaFromAttributes(function.UnderlyingMethod, options?.Meta) :
+                options?.Meta,
         };
 
         return new AIFunctionMcpServerResource(function, resource, options?.Metadata ?? []);
@@ -289,7 +294,6 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
     {
         AIFunction = function;
         ProtocolResourceTemplate = resourceTemplate;
-        ProtocolResourceTemplate.McpServerResource = this;
         ProtocolResource = resourceTemplate.AsResource();
         _metadata = metadata;
 
@@ -310,7 +314,34 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
     public override IReadOnlyList<object> Metadata => _metadata;
 
     /// <inheritdoc />
-    public override async ValueTask<ReadResourceResult?> ReadAsync(
+    public override bool IsMatch(string uri)
+    {
+        Throw.IfNull(uri);
+
+        // For templates, use the Regex to parse. For static resources, we can just compare the URIs.
+        if (_uriParser is null)
+        {
+            // This resource is not templated.
+            return UriTemplate.UriTemplateComparer.Instance.Equals(uri, ProtocolResourceTemplate.UriTemplate);
+        }
+
+        return _uriParser.IsMatch(uri);
+    }
+
+    private bool TryMatch(string uri, out Match? match)
+    {
+        if (_uriParser is null)
+        {
+            match = null;
+            return UriTemplate.UriTemplateComparer.Instance.Equals(uri, ProtocolResourceTemplate.UriTemplate);
+        }
+
+        match = _uriParser.Match(uri);
+        return match.Success;
+    }
+
+    /// <inheritdoc />
+    public override async ValueTask<ReadResourceResult> ReadAsync(
         RequestContext<ReadResourceRequestParams> request, CancellationToken cancellationToken = default)
     {
         Throw.IfNull(request);
@@ -319,20 +350,9 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Check to see if this URI template matches the request URI. If it doesn't, return null.
-        // For templates, use the Regex to parse. For static resources, we can just compare the URIs.
-        Match? match = null;
-        if (_uriParser is not null)
+        if (!TryMatch(request.Params.Uri, out Match? match))
         {
-            match = _uriParser.Match(request.Params.Uri);
-            if (!match.Success)
-            {
-                return null;
-            }
-        }
-        else if (!UriTemplate.UriTemplateComparer.Instance.Equals(request.Params.Uri, ProtocolResource!.Uri))
-        {
-            return null;
+            throw new InvalidOperationException($"Resource '{ProtocolResourceTemplate.UriTemplate}' does not match the provided URI '{request.Params.Uri}'.");
         }
 
         // Build up the arguments for the AIFunction call, including all of the name/value pairs from the URI.
@@ -371,7 +391,12 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
 
             DataContent dc => new()
             {
-                Contents = [new BlobResourceContents { Uri = request.Params!.Uri, MimeType = dc.MediaType, Blob = dc.Base64Data.ToString() }],
+                Contents = [new BlobResourceContents 
+                { 
+                    Uri = request.Params!.Uri, 
+                    MimeType = dc.MediaType, 
+                    Blob = EncodingUtilities.GetUtf8Bytes(dc.Base64Data.Span)
+                }],
             },
 
             string text => new()
@@ -400,7 +425,7 @@ internal sealed class AIFunctionMcpServerResource : McpServerResource
                         {
                             Uri = request.Params!.Uri,
                             MimeType = dc.MediaType,
-                            Blob = dc.Base64Data.ToString()
+                            Blob = EncodingUtilities.GetUtf8Bytes(dc.Base64Data.Span)
                         },
 
                         _ => throw new InvalidOperationException($"Unsupported AIContent type '{ac.GetType()}' returned from resource function."),

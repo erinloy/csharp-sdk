@@ -10,7 +10,7 @@ namespace ModelContextProtocol.Protocol;
 /// <remarks>
 /// <para>
 /// The <see cref="ITransport"/> interface is the core abstraction for bidirectional communication.
-/// It provides methods for sending and receiving messages, abstracting away the underlying transport mechanism
+/// It provides methods for sending and receiving messages, abstracting away the underlying transport mechanism,
 /// and allowing protocol implementations to be decoupled from communication details.
 /// </para>
 /// <para>
@@ -27,8 +27,8 @@ public interface ITransport : IAsyncDisposable
 {
     /// <summary>Gets an identifier associated with the current MCP session.</summary>
     /// <remarks>
-    /// Typically populated in transports supporting multiple sessions such as Streamable HTTP or SSE.
-    /// Can return <see langword="null"/> if the session hasn't initialized or if the transport doesn't
+    /// The identifier is typically populated in transports supporting multiple sessions, such as Streamable HTTP or SSE.
+    /// This property can return <see langword="null"/> if the session hasn't initialized or if the transport doesn't
     /// support multiple sessions (as is the case with STDIO).
     /// </remarks>
     string? SessionId { get; }
@@ -39,7 +39,7 @@ public interface ITransport : IAsyncDisposable
     /// <remarks>
     /// <para>
     /// The <see cref="MessageReader"/> provides access to incoming JSON-RPC messages received by the transport.
-    /// It returns a <see cref="ChannelReader{T}"/> which allows consuming messages in a thread-safe manner.
+    /// It returns a <see cref="ChannelReader{T}"/> which allows messages to be consumed in a thread-safe manner.
     /// </para>
     /// <para>
     /// The reader will continue to provide messages as long as the transport is connected. When the transport
@@ -68,30 +68,4 @@ public interface ITransport : IAsyncDisposable
     /// </para>
     /// </remarks>
     Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default);
-    
-    /// <summary>
-    /// Gets a value indicating whether the underlying transport connection is still alive.
-    /// </summary>
-    /// <remarks>
-    /// For stdio transports, this checks if the process is still running.
-    /// For HTTP/SSE transports, this checks if the connection is still active.
-    /// For other transports, this checks the connection state.
-    /// </remarks>
-    bool IsAlive { get; }
-
-    /// <summary>
-    /// Occurs when the underlying process for a stdio transport has terminated.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// This event is only fired for stdio-based transports when the associated process exits.
-    /// HTTP/SSE transports do not fire this event.
-    /// </para>
-    /// <para>
-    /// The event fires BEFORE the transport cleanup is complete, allowing consumers to know
-    /// the process has exited and prepare for reconnection. The <see cref="IAsyncDisposable.DisposeAsync"/>
-    /// method will handle process cleanup after this event fires.
-    /// </para>
-    /// </remarks>
-    event EventHandler? ProcessTerminated;
 }

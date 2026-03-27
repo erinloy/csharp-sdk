@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using ModelContextProtocol.Protocol;
 
 namespace ModelContextProtocol.Server;
@@ -5,10 +6,16 @@ namespace ModelContextProtocol.Server;
 /// <summary>
 /// Represents an instance of a Model Context Protocol (MCP) server that connects to and communicates with an MCP client.
 /// </summary>
-#pragma warning disable CS0618 // Type or member is obsolete
-public abstract partial class McpServer : McpSession, IMcpServer
-#pragma warning restore CS0618 // Type or member is obsolete
+public abstract partial class McpServer : McpSession
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="McpServer"/> class.
+    /// </summary>
+    [Experimental(Experimentals.Subclassing_DiagnosticId, UrlFormat = Experimentals.Subclassing_Url)]
+    protected McpServer()
+    {
+    }
+
     /// <summary>
     /// Gets the capabilities supported by the client.
     /// </summary>

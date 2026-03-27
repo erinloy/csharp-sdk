@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,7 +15,7 @@ public sealed class CallToolRequestParams : RequestParams
 {
     /// <summary>Gets or sets the name of the tool to invoke.</summary>
     [JsonPropertyName("name")]
-    public required string Name { get; init; }
+    public required string Name { get; set; }
 
     /// <summary>
     /// Gets or sets optional arguments to pass to the tool when invoking it on the server.
@@ -24,5 +25,25 @@ public sealed class CallToolRequestParams : RequestParams
     /// a parameter name and its corresponding argument value.
     /// </remarks>
     [JsonPropertyName("arguments")]
-    public IReadOnlyDictionary<string, JsonElement>? Arguments { get; init; }
+    public IDictionary<string, JsonElement>? Arguments { get; set; }
+
+    /// <summary>
+    /// Gets or sets optional task metadata to augment this request with task execution.
+    /// </summary>
+    /// <remarks>
+    /// When present, indicates that the requestor wants this operation executed as a task.
+    /// The receiver must support task augmentation for this specific request type.
+    /// </remarks>
+    [Experimental(Experimentals.Tasks_DiagnosticId, UrlFormat = Experimentals.Tasks_Url)]
+    [JsonIgnore]
+    public McpTaskMetadata? Task
+    {
+        get => TaskCore;
+        set => TaskCore = value;
+    }
+
+    // See ExperimentalInternalPropertyTests.cs before modifying this property.
+    [JsonInclude]
+    [JsonPropertyName("task")]
+    internal McpTaskMetadata? TaskCore { get; set; }
 }

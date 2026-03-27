@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace ModelContextProtocol.Server;
 
@@ -59,7 +60,7 @@ internal sealed class AIFunctionMcpServerPrompt : McpServerPrompt
         return Create(
             AIFunctionFactory.Create(method, args =>
             {
-                Debug.Assert(args.Services is RequestServiceProvider<GetPromptRequestParams>, $"The service provider should be a {nameof(RequestServiceProvider<GetPromptRequestParams>)} for this method to work correctly.");
+                Debug.Assert(args.Services is RequestServiceProvider<GetPromptRequestParams>, $"The service provider should be a {nameof(RequestServiceProvider<>)} for this method to work correctly.");
                 return createTargetFunc(((RequestServiceProvider<GetPromptRequestParams>)args.Services!).Request);
             }, CreateAIFunctionFactoryOptions(method, options)),
             options);
@@ -136,6 +137,11 @@ internal sealed class AIFunctionMcpServerPrompt : McpServerPrompt
             Description = options?.Description ?? function.Description,
             Arguments = args,
             Icons = options?.Icons,
+
+            // Populate Meta from options and/or McpMetaAttribute instances if a MethodInfo is available
+            Meta = function.UnderlyingMethod is not null ?
+                AIFunctionMcpServerTool.CreateMetaFromAttributes(function.UnderlyingMethod, options?.Meta) :
+                options?.Meta
         };
 
         return new AIFunctionMcpServerPrompt(function, prompt, options?.Metadata ?? []);
@@ -176,7 +182,6 @@ internal sealed class AIFunctionMcpServerPrompt : McpServerPrompt
     {
         AIFunction = function;
         ProtocolPrompt = prompt;
-        ProtocolPrompt.McpServerPrompt = this;
         _metadata = metadata;
     }
 

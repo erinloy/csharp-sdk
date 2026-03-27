@@ -1,4 +1,4 @@
-﻿using Anthropic.SDK;
+﻿using Anthropic;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -41,8 +41,8 @@ foreach (var tool in tools)
     Console.WriteLine($"Connected to server with tools: {tool.Name}");
 }
 
-using var anthropicClient = new AnthropicClient(new APIAuthentication(builder.Configuration["ANTHROPIC_API_KEY"]))
-    .Messages
+using var anthropicClient = new AnthropicClient(new() { ApiKey = builder.Configuration["ANTHROPIC_API_KEY"] })
+    .AsIChatClient("claude-haiku-4-5-20251001")
     .AsBuilder()
     .UseFunctionInvocation()
     .Build();
@@ -50,7 +50,7 @@ using var anthropicClient = new AnthropicClient(new APIAuthentication(builder.Co
 var options = new ChatOptions
 {
     MaxOutputTokens = 1000,
-    ModelId = "claude-3-5-sonnet-20241022",
+    ModelId = "claude-haiku-4-5-20251001",
     Tools = [.. tools]
 };
 

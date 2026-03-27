@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -62,7 +63,7 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
                                 };
 
                             default:
-                                throw new McpException($"Unexpected cursor: '{cursor}'", McpErrorCode.InvalidParams);
+                                throw new McpProtocolException($"Unexpected cursor: '{cursor}'", McpErrorCode.InvalidParams);
                         }
                     })
         .WithGetPromptHandler(async (request, cancellationToken) =>
@@ -78,7 +79,7 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
                     };
 
                 default:
-                    throw new McpException($"Unknown prompt '{request.Params?.Name}'", McpErrorCode.InvalidParams);
+                    throw new McpProtocolException($"Unknown prompt '{request.Params?.Name}'", McpErrorCode.InvalidParams);
             }
         })
         .WithPrompts<SimplePrompts>();
@@ -100,8 +101,8 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
     {
         await using McpClient client = await CreateMcpClientForServer();
 
-        var prompts = await client.ListPromptsAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(6, prompts.Count);
+        var prompts = await client.ListPromptsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(8, prompts.Count);
 
         var prompt = prompts.First(t => t.Name == "returns_chat_messages");
         Assert.Equal("Returns chat messages", prompt.Description);
@@ -129,8 +130,8 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
     {
         await using McpClient client = await CreateMcpClientForServer();
 
-        var prompts = await client.ListPromptsAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(6, prompts.Count);
+        var prompts = await client.ListPromptsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(8, prompts.Count);
 
         Channel<JsonRpcNotification> listChanged = Channel.CreateUnbounded<JsonRpcNotification>();
         var notificationRead = listChanged.Reader.ReadAsync(TestContext.Current.CancellationToken);
@@ -150,8 +151,8 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
             serverPrompts.Add(newPrompt);
             await notificationRead;
 
-            prompts = await client.ListPromptsAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(7, prompts.Count);
+            prompts = await client.ListPromptsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(9, prompts.Count);
             Assert.Contains(prompts, t => t.Name == "NewPrompt");
 
             notificationRead = listChanged.Reader.ReadAsync(TestContext.Current.CancellationToken);
@@ -160,8 +161,8 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
             await notificationRead;
         }
 
-        prompts = await client.ListPromptsAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(6, prompts.Count);
+        prompts = await client.ListPromptsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(8, prompts.Count);
         Assert.DoesNotContain(prompts, t => t.Name == "NewPrompt");
     }
 
@@ -190,9 +191,78 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
     {
         await using McpClient client = await CreateMcpClientForServer();
 
-        await Assert.ThrowsAsync<McpException>(async () => await client.GetPromptAsync(
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
             nameof(SimplePrompts.ThrowsException),
             cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Logs_Prompt_Name_On_Successful_Call()
+    {
+        await using McpClient client = await CreateMcpClientForServer();
+
+        var result = await client.GetPromptAsync(
+            "returns_chat_messages",
+            new Dictionary<string, object?> { ["message"] = "hello" },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+
+        var infoLog = Assert.Single(MockLoggerProvider.LogMessages, m => m.Message == "GetPrompt \"returns_chat_messages\" completed.");
+        Assert.Equal(LogLevel.Information, infoLog.LogLevel);
+    }
+
+    [Fact]
+    public async Task Logs_Prompt_Name_When_Prompt_Throws()
+    {
+        await using McpClient client = await CreateMcpClientForServer();
+
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
+            "throws_exception",
+            new Dictionary<string, object?> { ["message"] = "test" },
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        var errorLog = Assert.Single(MockLoggerProvider.LogMessages, m => m.LogLevel == LogLevel.Error);
+        Assert.Equal("GetPrompt \"throws_exception\" threw an unhandled exception.", errorLog.Message);
+        Assert.IsType<FormatException>(errorLog.Exception);
+    }
+
+    [Fact]
+    public async Task Logs_Prompt_Error_When_Prompt_Throws_OperationCanceledException()
+    {
+        await using McpClient client = await CreateMcpClientForServer();
+
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
+            "throws_operation_canceled_exception",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(MockLoggerProvider.LogMessages, m =>
+            m.LogLevel == LogLevel.Error &&
+            m.Message == "GetPrompt \"throws_operation_canceled_exception\" threw an unhandled exception." &&
+            m.Exception is OperationCanceledException);
+
+        Assert.Contains(MockLoggerProvider.LogMessages, m =>
+            m.LogLevel == LogLevel.Warning &&
+            m.Message.Contains("request handler failed"));
+    }
+
+    [Fact]
+    public async Task Logs_Prompt_Error_When_Prompt_Throws_McpProtocolException()
+    {
+        await using McpClient client = await CreateMcpClientForServer();
+
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
+            "throws_mcp_protocol_exception",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(MockLoggerProvider.LogMessages, m =>
+            m.LogLevel == LogLevel.Error &&
+            m.Message == "GetPrompt \"throws_mcp_protocol_exception\" threw an unhandled exception." &&
+            m.Exception is McpProtocolException);
+
+        Assert.Contains(MockLoggerProvider.LogMessages, m =>
+            m.LogLevel == LogLevel.Warning &&
+            m.Message.Contains("request handler failed"));
     }
 
     [Fact]
@@ -200,7 +270,7 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
     {
         await using McpClient client = await CreateMcpClientForServer();
 
-        var e = await Assert.ThrowsAsync<McpException>(async () => await client.GetPromptAsync(
+        var e = await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
             "NotRegisteredPrompt",
             cancellationToken: TestContext.Current.CancellationToken));
 
@@ -212,7 +282,7 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
     {
         await using McpClient client = await CreateMcpClientForServer();
 
-        var e = await Assert.ThrowsAsync<McpException>(async () => await client.GetPromptAsync(
+        var e = await Assert.ThrowsAsync<McpProtocolException>(async () => await client.GetPromptAsync(
             "returns_chat_messages",
             cancellationToken: TestContext.Current.CancellationToken));
 
@@ -334,6 +404,14 @@ public partial class McpServerBuilderExtensionsPromptsTests : ClientServerTestBa
         [McpServerPrompt, Description("Returns chat messages")]
         public static ChatMessage[] ThrowsException([Description("The first parameter")] string message) =>
             throw new FormatException("uh oh");
+
+        [McpServerPrompt, Description("Throws OperationCanceledException")]
+        public static ChatMessage[] ThrowsOperationCanceledException() =>
+            throw new OperationCanceledException("Prompt was canceled");
+
+        [McpServerPrompt, Description("Throws McpProtocolException")]
+        public static ChatMessage[] ThrowsMcpProtocolException() =>
+            throw new McpProtocolException("Prompt protocol error", McpErrorCode.InvalidParams);
 
         [McpServerPrompt(Title = "This is a title", IconSource = "https://example.com/prompt-icon.svg"), Description("Returns chat messages")]
         public string ReturnsString([Description("The first parameter")] string message) =>

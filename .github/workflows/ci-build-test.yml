@@ -15,6 +15,9 @@ on:
       - "*.sln"
       - "*.props"
       - "Makefile"
+      - "global.json"
+      - "package.json"
+      - "package-lock.json"
       - "src/**"
       - "tests/**"
       - "samples/**"
@@ -34,64 +37,49 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Clone the repo
-      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - name: 📥 Clone the repo
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
-    - name: Set up .NET
-      uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5.0.0
+    - name: 🔧 Set up .NET
+      uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309 # v5.1.0
       with:
         dotnet-version: |
           10.0.x
           9.0.x
 
-    # NetFX testing on non-Windows requires mono
-    - name: Setup Mono
-      if: runner.os == 'Linux'
-      run: sudo apt-get install -y mono-devel
-
-    - name: Setup Mono on macOS
-      if: runner.os == 'macOS'
-      run: brew install mono
-
-    - name: Set up Node.js
-      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+    - name: 🔧 Set up Node.js
+      uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
       with:
         node-version: '20'
 
-    - name: Install dependencies for tests
-      run: npm install @modelcontextprotocol/server-everything
+    - name: 📦 Install pinned npm dependencies for tests
+      run: npm ci
 
-    - name: Install dependencies for tests
-      run: npm install @modelcontextprotocol/server-memory
+    - name: 🏗️ Build
+      run: make build CONFIGURATION=${{ matrix.configuration }}
 
-    - name: Build
-      run: dotnet build --configuration ${{ matrix.configuration }}
+    - name: 🧪 Test
+      run: make test CONFIGURATION=${{ matrix.configuration }}
 
-    - name: Pack
-      run: dotnet pack --configuration ${{ matrix.configuration }}
+    - name: 🧪 AOT Compatibility
+      if: matrix.configuration == 'Release'
+      run: make test-aot CONFIGURATION=${{ matrix.configuration }}
 
-    - name: Test
-      run: >-
-        dotnet test
-        --filter '(Execution!=Manual)'
-        --no-build
-        --configuration ${{ matrix.configuration }}
-        --logger "trx"
-        --logger "GitHubActions;summary.includePassedTests=true;summary.includeSkippedTests=true"
-        --blame
-        --blame-hang-timeout 7m
-        --blame-crash
-        --results-directory testresults
-        --collect "XPlat Code Coverage" -- RunConfiguration.CollectSourceInformation=true
+    - name: 📦 Pack
+      if: matrix.configuration == 'Release'
+      run: make pack CONFIGURATION=${{ matrix.configuration }}
 
-    - name: Upload test results artifact
+    - name: 📚 Generate docs
+      run: make generate-docs CONFIGURATION=${{ matrix.configuration }}
+
+    - name: 📤 Upload test results artifact
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: testresults-${{ matrix.os }}-${{ matrix.configuration }}
-        path: testresults/**
+        path: artifacts/testresults/**
 
   publish-coverage:
     if: github.actor != 'dependabot[bot]'

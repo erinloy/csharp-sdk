@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.AI;
 using ModelContextProtocol.Protocol;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ModelContextProtocol.Client;
 
@@ -13,7 +14,7 @@ namespace ModelContextProtocol.Client;
 /// <para>
 /// Each handler in this class corresponds to a specific client endpoint in the Model Context Protocol and
 /// is responsible for processing a particular type of message. The handlers are used to customize
-/// the behavior of the MCP server by providing implementations for the various protocol operations.
+/// the behavior of the MCP client by providing implementations for the various protocol operations.
 /// </para>
 /// <para>
 /// When a server sends a message to the client, the appropriate handler is invoked to process it
@@ -21,12 +22,12 @@ namespace ModelContextProtocol.Client;
 /// is done based on an ordinal, case-sensitive string comparison.
 /// </para>
 /// </remarks>
-public class McpClientHandlers
+public sealed class McpClientHandlers
 {
     /// <summary>Gets or sets notification handlers to register with the client.</summary>
     /// <remarks>
     /// <para>
-    /// When constructed, the client will enumerate these handlers once, which may contain multiple handlers per notification method key.
+    /// When constructed, the client will enumerate these handlers, which might contain multiple handlers per notification method key, once.
     /// The client will not re-enumerate the sequence after initialization.
     /// </para>
     /// <para>
@@ -36,7 +37,7 @@ public class McpClientHandlers
     /// </para>
     /// <para>
     /// Handlers provided via <see cref="NotificationHandlers"/> will be registered with the client for the lifetime of the client.
-    /// For transient handlers, <see cref="IMcpEndpoint.RegisterNotificationHandler"/> may be used to register a handler that can
+    /// For transient handlers, you can use <see cref="McpSession.RegisterNotificationHandler"/> to register a handler that can
     /// then be unregistered by disposing of the <see cref="IAsyncDisposable"/> returned from the method.
     /// </para>
     /// </remarks>
@@ -46,7 +47,7 @@ public class McpClientHandlers
     /// Gets or sets the handler for <see cref="RequestMethods.RootsList"/> requests.
     /// </summary>
     /// <remarks>
-    /// This handler is invoked when a client sends a <see cref="RequestMethods.RootsList"/> request to retrieve available roots.
+    /// This handler is invoked when the server sends a <see cref="RequestMethods.RootsList"/> request to retrieve available roots.
     /// The handler receives request parameters and should return a <see cref="ListRootsResult"/> containing the collection of available roots.
     /// </remarks>
     public Func<ListRootsRequestParams?, CancellationToken, ValueTask<ListRootsResult>>? RootsHandler { get; set; }
@@ -75,14 +76,35 @@ public class McpClientHandlers
     /// using an AI model. The client must set this property for the sampling capability to work.
     /// </para>
     /// <para>
-    /// The handler receives message parameters, a progress reporter for updates, and a 
-    /// cancellation token. It should return a <see cref="CreateMessageResult"/> containing the 
+    /// The handler receives message parameters, a progress reporter for updates, and a
+    /// cancellation token. It should return a <see cref="CreateMessageResult"/> containing the
     /// generated content.
     /// </para>
     /// <para>
-    /// You can create a handler using the <see cref="McpClientExtensions.CreateSamplingHandler"/> extension
+    /// You can create a handler using the <see cref="AIContentExtensions.CreateSamplingHandler"/> extension
     /// method with any implementation of <see cref="IChatClient"/>.
     /// </para>
     /// </remarks>
     public Func<CreateMessageRequestParams?, IProgress<ProgressNotificationValue>, CancellationToken, ValueTask<CreateMessageResult>>? SamplingHandler { get; set; }
+
+    /// <summary>
+    /// Gets or sets the handler for processing <see cref="NotificationMethods.TaskStatusNotification"/> notifications.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This handler is called when the server sends a task status notification to inform the client
+    /// about changes to a task's state. These notifications are optional and clients MUST NOT rely
+    /// on receiving them.
+    /// </para>
+    /// <para>
+    /// The handler receives the updated <see cref="McpTask"/> object containing the current task state,
+    /// including its status, status message, and timestamps.
+    /// </para>
+    /// <para>
+    /// This handler is typically used to update UI or trigger actions based on task progress
+    /// without requiring explicit polling.
+    /// </para>
+    /// </remarks>
+    [Experimental(Experimentals.Tasks_DiagnosticId, UrlFormat = Experimentals.Tasks_Url)]
+    public Func<McpTask, CancellationToken, ValueTask>? TaskStatusHandler { get; set; }
 }

@@ -1,12 +1,10 @@
-﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using ModelContextProtocol.AspNetCore.Tests.Utils;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
-using ModelContextProtocol.Tests.Utils;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
@@ -143,20 +141,13 @@ public abstract class MapMcpTests(ITestOutputHelper testOutputHelper) : KestrelI
     }
 
     [Fact]
-    public async Task Sampling_DoesNotCloseStream_Prematurely()
+    public async Task Sampling_DoesNotCloseStreamPrematurely()
     {
         Assert.SkipWhen(Stateless, "Sampling is not supported in stateless mode.");
 
         Builder.Services.AddMcpServer().WithHttpTransport(ConfigureStateless).WithTools<SamplingRegressionTools>();
 
-        var mockLoggerProvider = new MockLoggerProvider();
-        Builder.Logging.AddProvider(mockLoggerProvider);
-        Builder.Logging.SetMinimumLevel(LogLevel.Debug);
-
         await using var app = Builder.Build();
-
-        // Reset the LoggerFactory used by the client to use the MockLoggerProvider as well.
-        LoggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 
         app.MapMcp();
 
@@ -172,14 +163,14 @@ public abstract class MapMcpTests(ITestOutputHelper testOutputHelper) : KestrelI
                     Assert.NotNull(parameters?.Messages);
                     var message = Assert.Single(parameters.Messages);
                     Assert.Equal(Role.User, message.Role);
-                    Assert.Equal("Test prompt for sampling", Assert.IsType<TextContentBlock>(message.Content).Text);
+                    Assert.Equal("Test prompt for sampling", Assert.IsType<TextContentBlock>(Assert.Single(message.Content)).Text);
 
                     sampleCount++;
                     return new CreateMessageResult
                     {
                         Model = "test-model",
                         Role = Role.Assistant,
-                        Content = new TextContentBlock { Text = "Sampling response from client" },
+                        Content = [new TextContentBlock { Text = "Sampling response from client" }],
                     };
                 }
             }
@@ -202,11 +193,11 @@ public abstract class MapMcpTests(ITestOutputHelper testOutputHelper) : KestrelI
 
         // Verify that the tool call and the sampling request both used the same ID to ensure we cover against regressions.
         // https://github.com/modelcontextprotocol/csharp-sdk/issues/464
-        Assert.Single(mockLoggerProvider.LogMessages, m =>
+        Assert.Single(MockLoggerProvider.LogMessages, m =>
             m.Category == "ModelContextProtocol.Client.McpClient" &&
             m.Message.Contains("request '2' for method 'tools/call'"));
 
-        Assert.Single(mockLoggerProvider.LogMessages, m =>
+        Assert.Single(MockLoggerProvider.LogMessages, m =>
             m.Category == "ModelContextProtocol.Server.McpServer" &&
             m.Message.Contains("request '2' for method 'sampling/createMessage'"));
     }
@@ -240,8 +231,67 @@ public abstract class MapMcpTests(ITestOutputHelper testOutputHelper) : KestrelI
             "This suggests the GET request is not respecting ApplicationStopping token.");
     }
 
+    [Fact]
+    public async Task LongRunningToolCall_DoesNotTimeout_WhenNoEventStreamStore()
+    {
+        // Regression test for: Tool calls that last over HttpClient timeout without producing
+        // intermediate notifications will timeout because HttpClient doesn't see the 200 response
+        // until the first message is written. When primingItem is null (no ISseEventStreamStore),
+        // we should flush the response stream so HttpClient sees the 200 immediately.
+
+        Builder.Services.AddMcpServer().WithHttpTransport(ConfigureStateless).WithTools<LongRunningTools>();
+
+        await using var app = Builder.Build();
+        app.MapMcp();
+        await app.StartAsync(TestContext.Current.CancellationToken);
+
+        // Retry a couple of times to reduce occasional flakiness on low-resource machines.
+        // If the server regresses to flushing only after tool completion, each attempt should still fail
+        // because HttpClient timeout (1 second) is below the tool duration (2 seconds).
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                // Create a custom HttpClient with a very short timeout (1 second)
+                // The tool will take 2 seconds to complete
+                using var shortTimeoutClient = new HttpClient(SocketsHttpHandler, disposeHandler: false)
+                {
+                    BaseAddress = new Uri("http://localhost:5000/"),
+                    Timeout = TimeSpan.FromSeconds(1)
+                };
+
+                var path = UseStreamableHttp ? "/" : "/sse";
+                var transportMode = UseStreamableHttp ? HttpTransportMode.StreamableHttp : HttpTransportMode.Sse;
+
+                await using var transport = new HttpClientTransport(new()
+                {
+                    Endpoint = new($"http://localhost:5000{path}"),
+                    TransportMode = transportMode,
+                }, shortTimeoutClient, LoggerFactory);
+
+                await using var mcpClient = await McpClient.CreateAsync(transport, loggerFactory: LoggerFactory, cancellationToken: TestContext.Current.CancellationToken);
+
+                // Call a tool that takes 2 seconds - this should succeed despite the 1 second HttpClient timeout
+                // because the response stream is flushed immediately after receiving the request
+                var response = await mcpClient.CallToolAsync(
+                    "long_running_operation",
+                    new Dictionary<string, object?>() { ["durationMs"] = 2000 },
+                    cancellationToken: TestContext.Current.CancellationToken);
+
+                var content = Assert.Single(response.Content.OfType<TextContentBlock>());
+                Assert.Equal("Operation completed after 2000ms", content.Text);
+                return;
+            }
+            catch (OperationCanceledException) when (attempt < 2)
+            {
+                // Retry intermittent timeout-related failures on slow CI machines.
+            }
+        }
+
+    }
+
     private ClaimsPrincipal CreateUser(string name)
-        => new ClaimsPrincipal(new ClaimsIdentity(
+        => new(new ClaimsIdentity(
             [new Claim("name", name), new Claim(ClaimTypes.NameIdentifier, name)],
             "TestAuthType", "name", "role"));
 
@@ -285,15 +335,29 @@ public abstract class MapMcpTests(ITestOutputHelper testOutputHelper) : KestrelI
                     new SamplingMessage
                     {
                         Role = Role.User,
-                        Content = new TextContentBlock { Text = prompt },
+                        Content = [new TextContentBlock { Text = prompt }],
                     }
                 ],
+                MaxTokens = 1000
             };
 
             await server.SampleAsync(samplingRequest, cancellationToken);
             var samplingResult = await server.SampleAsync(samplingRequest, cancellationToken);
 
-            return $"Sampling completed successfully. Client responded: {Assert.IsType<TextContentBlock>(samplingResult.Content).Text}";
+            return $"Sampling completed successfully. Client responded: {Assert.IsType<TextContentBlock>(Assert.Single(samplingResult.Content)).Text}";
+        }
+    }
+
+    [McpServerToolType]
+    protected class LongRunningTools
+    {
+        [McpServerTool, Description("Simulates a long-running operation")]
+        public static async Task<string> LongRunningOperation(
+            [Description("Duration of the operation in milliseconds")] int durationMs,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(durationMs, cancellationToken);
+            return $"Operation completed after {durationMs}ms";
         }
     }
 }

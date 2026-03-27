@@ -142,7 +142,7 @@ public partial class McpServerResourceTests
         const string Name = "Hello";
 
         McpServerResource t;
-        ReadResourceResult? result;
+        ReadResourceResult result;
         McpServer server = new Mock<McpServer>().Object;
 
         t = McpServerResource.Create(() => "42", new() { Name = Name });
@@ -282,11 +282,12 @@ public partial class McpServerResourceTests
     [InlineData("resource://mcp/Hello?arg1=42&arg2=84")]
     [InlineData("resource://mcp/Hello?arg1=42&arg2=84&arg3=123")]
     [InlineData("resource://mcp/Hello#fragment")]
-    public async Task UriTemplate_NonMatchingUri_ReturnsNull(string uri)
+    public async Task UriTemplate_NonMatchingUri_DoesNotMatch(string uri)
     {
         McpServerResource t = McpServerResource.Create((string arg1) => arg1, new() { Name = "Hello" });
         Assert.Equal("resource://mcp/Hello{?arg1}", t.ProtocolResourceTemplate.UriTemplate);
-        Assert.Null(await t.ReadAsync(
+        Assert.False(t.IsMatch(uri));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await t.ReadAsync(
             new RequestContext<ReadResourceRequestParams>(new Mock<McpServer>().Object, CreateTestJsonRpcRequest()) { Params = new() { Uri = uri } },
             TestContext.Current.CancellationToken));
     }
@@ -307,7 +308,7 @@ public partial class McpServerResourceTests
     {
         McpServerResource t1 = McpServerResource.Create(() => "resource", new() { UriTemplate = "resource://MyCoolResource" });
         McpServerResource t2 = McpServerResource.Create(() => "resource", new() { UriTemplate = "resource://MyCoolResource2" });
-        McpServerResourceCollection collection = new() { t1, t2 };
+        McpServerResourceCollection collection = [t1, t2];
         Assert.True(collection.TryGetPrimitive("resource://mycoolresource", out McpServerResource? result));
         Assert.Same(t1, result);
     }
@@ -337,7 +338,7 @@ public partial class McpServerResourceTests
         McpServerResource t = McpServerResource.Create((string? arg1 = null, int? arg2 = null) => arg1 + arg2, new() { Name = "Hello" });
         Assert.Equal("resource://mcp/Hello{?arg1,arg2}", t.ProtocolResourceTemplate.UriTemplate);
 
-        ReadResourceResult? result;
+        ReadResourceResult result;
 
         result = await t.ReadAsync(
             new RequestContext<ReadResourceRequestParams>(new Mock<McpServer>().Object, CreateTestJsonRpcRequest()) { Params = new() { Uri = "resource://mcp/Hello" } },
@@ -537,7 +538,7 @@ public partial class McpServerResourceTests
         McpServerResource resource = McpServerResource.Create((McpServer server) =>
         {
             Assert.Same(mockServer.Object, server);
-            return new ReadResourceResult { Contents = new List<ResourceContents> { new TextResourceContents { Text = "hello" } } };
+            return new ReadResourceResult { Contents = [new TextResourceContents { Text = "hello", Uri = "" }] };
         }, new() { Name = "Test" });
         var result = await resource.ReadAsync(
             new RequestContext<ReadResourceRequestParams>(mockServer.Object, CreateTestJsonRpcRequest()) { Params = new() { Uri = "resource://mcp/Test" } },
@@ -554,7 +555,7 @@ public partial class McpServerResourceTests
         McpServerResource resource = McpServerResource.Create((McpServer server) =>
         {
             Assert.Same(mockServer.Object, server);
-            return new TextResourceContents { Text = "hello" };
+            return new TextResourceContents { Text = "hello", Uri = "" };
         }, new() { Name = "Test", SerializerOptions = JsonContext6.Default.Options });
         var result = await resource.ReadAsync(
             new RequestContext<ReadResourceRequestParams>(mockServer.Object, CreateTestJsonRpcRequest()) { Params = new() { Uri = "resource://mcp/Test" } },
@@ -573,8 +574,8 @@ public partial class McpServerResourceTests
             Assert.Same(mockServer.Object, server);
             return (IList<ResourceContents>)
             [
-                new TextResourceContents { Text = "hello" },
-                new BlobResourceContents { Blob = Convert.ToBase64String(new byte[] { 1, 2, 3 }) },
+                new TextResourceContents { Text = "hello", Uri = "" },
+                BlobResourceContents.FromBytes((byte[])[1, 2, 3], ""),
             ];
         }, new() { Name = "Test" });
         var result = await resource.ReadAsync(
@@ -583,7 +584,7 @@ public partial class McpServerResourceTests
         Assert.NotNull(result);
         Assert.Equal(2, result.Contents.Count);
         Assert.Equal("hello", ((TextResourceContents)result.Contents[0]).Text);
-        Assert.Equal(Convert.ToBase64String(new byte[] { 1, 2, 3 }), ((BlobResourceContents)result.Contents[1]).Blob);
+        Assert.Equal(Convert.ToBase64String(new byte[] { 1, 2, 3 }), System.Text.Encoding.UTF8.GetString(((BlobResourceContents)result.Contents[1]).Blob.ToArray()));
     }
 
     [Fact]
@@ -635,7 +636,7 @@ public partial class McpServerResourceTests
             TestContext.Current.CancellationToken);
         Assert.NotNull(result);
         Assert.Single(result.Contents);
-        Assert.Equal(Convert.ToBase64String(new byte[] { 0, 1, 2 }), ((BlobResourceContents)result.Contents[0]).Blob);
+        Assert.Equal(Convert.ToBase64String(new byte[] { 0, 1, 2 }), System.Text.Encoding.UTF8.GetString(((BlobResourceContents)result.Contents[0]).Blob.ToArray()));
         Assert.Equal("application/octet-stream", ((BlobResourceContents)result.Contents[0]).MimeType);
     }
 
@@ -658,7 +659,7 @@ public partial class McpServerResourceTests
         Assert.NotNull(result);
         Assert.Equal(2, result.Contents.Count);
         Assert.Equal("hello!", ((TextResourceContents)result.Contents[0]).Text);
-        Assert.Equal(Convert.ToBase64String(new byte[] { 4, 5, 6 }), ((BlobResourceContents)result.Contents[1]).Blob);
+        Assert.Equal(Convert.ToBase64String(new byte[] { 4, 5, 6 }), System.Text.Encoding.UTF8.GetString(((BlobResourceContents)result.Contents[1]).Blob.ToArray()));
         Assert.Equal("application/json", ((BlobResourceContents)result.Contents[1]).MimeType);
     }
 
@@ -682,7 +683,7 @@ public partial class McpServerResourceTests
     {
         var icons = new List<Icon>
         {
-            new() { Source = "https://example.com/resource-icon.png", MimeType = "image/png", Sizes = new List<string> { "32x32" } }
+            new() { Source = "https://example.com/resource-icon.png", MimeType = "image/png", Sizes = ["32x32"] }
         };
 
         McpServerResource resource = McpServerResource.Create(() => "test content", new McpServerResourceCreateOptions

@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Moq;
+using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -269,10 +270,10 @@ public partial class McpServerToolTests
 
         Assert.Equal("text", (result.Content[0] as TextContentBlock)?.Text);
 
-        Assert.Equal("1234", (result.Content[1] as ImageContentBlock)?.Data);
+        Assert.Equal("1234", System.Text.Encoding.UTF8.GetString((result.Content[1] as ImageContentBlock)?.Data.ToArray() ?? []));
         Assert.Equal("image/png", (result.Content[1] as ImageContentBlock)?.MimeType);
 
-        Assert.Equal("1234", (result.Content[2] as AudioContentBlock)?.Data);
+        Assert.Equal("1234", System.Text.Encoding.UTF8.GetString((result.Content[2] as AudioContentBlock)?.Data.ToArray() ?? []));
         Assert.Equal("audio/wav", (result.Content[2] as AudioContentBlock)?.MimeType);
     }
 
@@ -308,12 +309,12 @@ public partial class McpServerToolTests
         }
         else if (result.Content[0] is ImageContentBlock ic)
         {
-            Assert.Equal(data.Split(',').Last(), ic.Data);
+            Assert.Equal(data.Split(',').Last(), System.Text.Encoding.UTF8.GetString(ic.Data.ToArray()));
             Assert.Equal("image/png", ic.MimeType);
         }
         else if (result.Content[0] is AudioContentBlock ac)
         {
-            Assert.Equal(data.Split(',').Last(), ac.Data);
+            Assert.Equal(data.Split(',').Last(), System.Text.Encoding.UTF8.GetString(ac.Data.ToArray()));
             Assert.Equal("audio/wav", ac.MimeType);
         }
         else
@@ -396,7 +397,7 @@ public partial class McpServerToolTests
             return (IList<ContentBlock>)
             [
                 new TextContentBlock { Text = "42" },
-                new ImageContentBlock { Data = "1234", MimeType = "image/png" }
+                ImageContentBlock.FromBytes((byte[])[1, 2, 3, 4], "image/png")
             ];
         });
         var result = await tool.InvokeAsync(
@@ -404,7 +405,7 @@ public partial class McpServerToolTests
             TestContext.Current.CancellationToken);
         Assert.Equal(2, result.Content.Count);
         Assert.Equal("42", Assert.IsType<TextContentBlock>(result.Content[0]).Text);
-        Assert.Equal("1234", Assert.IsType<ImageContentBlock>(result.Content[1]).Data);
+        Assert.Equal((byte[])[1, 2, 3, 4], Assert.IsType<ImageContentBlock>(result.Content[1]).DecodedData.ToArray());
         Assert.Equal("image/png", Assert.IsType<ImageContentBlock>(result.Content[1]).MimeType);
     }
 
@@ -413,7 +414,7 @@ public partial class McpServerToolTests
     {
         CallToolResult response = new()
         {
-            Content = new List<ContentBlock> { new TextContentBlock { Text = "text" }, new ImageContentBlock { Data = "1234", MimeType = "image/png" } }
+            Content = [new TextContentBlock { Text = "text" }, ImageContentBlock.FromBytes((byte[])[1, 2, 3, 4], "image/png")]
         };
 
         Mock<McpServer> mockServer = new();
@@ -430,7 +431,7 @@ public partial class McpServerToolTests
 
         Assert.Equal(2, result.Content.Count);
         Assert.Equal("text", Assert.IsType<TextContentBlock>(result.Content[0]).Text);
-        Assert.Equal("1234", Assert.IsType<ImageContentBlock>(result.Content[1]).Data);
+        Assert.Equal((byte[])[1, 2, 3, 4], Assert.IsType<ImageContentBlock>(result.Content[1]).DecodedData.ToArray());
     }
 
     [Fact]
@@ -530,6 +531,273 @@ public partial class McpServerToolTests
 
         Assert.Null(tool.ProtocolTool.OutputSchema);
         Assert.Null(result.StructuredContent);
+    }
+
+    [Fact]
+    public void OutputSchema_Options_OverridesReturnTypeSchema()
+    {
+        // When OutputSchema is set on options, it should be used instead of the return type's schema
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"]}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => "result", new()
+        {
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("name", out _));
+        Assert.True(properties.TryGetProperty("age", out _));
+    }
+
+    [Fact]
+    public void OutputSchema_Options_WithCallToolResultReturn()
+    {
+        // When the tool returns CallToolResult, OutputSchema on options provides the advertised schema
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"result":{"type":"string"}},"required":["result"]}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => new CallToolResult() { Content = [] }, new()
+        {
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.Equal("object", tool.ProtocolTool.OutputSchema.Value.GetProperty("type").GetString());
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("result", out _));
+    }
+
+    [Fact]
+    public async Task OutputSchema_Options_CallToolResult_PreservesStructuredContent()
+    {
+        // When tool returns CallToolResult with StructuredContent, it's preserved in the response
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"]}""").RootElement;
+        JsonElement structuredContent = JsonDocument.Parse("""{"value":42}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => new CallToolResult()
+        {
+            Content = [new TextContentBlock { Text = "42" }],
+            StructuredContent = structuredContent,
+        }, new()
+        {
+            Name = "tool",
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+        var mockServer = new Mock<McpServer>();
+        var request = new RequestContext<CallToolRequestParams>(mockServer.Object, CreateTestJsonRpcRequest())
+        {
+            Params = new CallToolRequestParams { Name = "tool" },
+        };
+
+        var result = await tool.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.NotNull(result.StructuredContent);
+        Assert.Equal(42, result.StructuredContent.Value.GetProperty("value").GetInt32());
+        AssertMatchesJsonSchema(tool.ProtocolTool.OutputSchema.Value, result.StructuredContent);
+    }
+
+    [Fact]
+    public void OutputSchema_Options_RequiresUseStructuredContent()
+    {
+        // OutputSchema without UseStructuredContent=true should not produce an output schema
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"name":{"type":"string"}}}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => "result", new()
+        {
+            UseStructuredContent = false,
+            OutputSchema = outputSchema,
+        });
+
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void OutputSchema_Options_NonObjectSchema_GetsWrapped()
+    {
+        // Non-object output schema should be wrapped in a "result" property envelope
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"string"}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => "result", new()
+        {
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.Equal("object", tool.ProtocolTool.OutputSchema.Value.GetProperty("type").GetString());
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("result", out var resultProp));
+        Assert.Equal("string", resultProp.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void OutputSchema_Options_NullableObjectSchema_BecomesObject()
+    {
+        // ["object", "null"] type should be simplified to just "object"
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":["object","null"],"properties":{"name":{"type":"string"}}}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(() => "result", new()
+        {
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.Equal("object", tool.ProtocolTool.OutputSchema.Value.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void OutputSchema_Attribute_WithType_GeneratesSchema()
+    {
+        McpServerTool tool = McpServerTool.Create(ToolWithOutputSchemaAttribute, new() { SerializerOptions = CreateSerializerOptionsWithPerson() });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.Equal("object", tool.ProtocolTool.OutputSchema.Value.GetProperty("type").GetString());
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("name", out _));
+        Assert.True(properties.TryGetProperty("age", out _));
+    }
+
+    [Fact]
+    public async Task OutputSchema_Attribute_CallToolResult_PreservesStructuredContent()
+    {
+        McpServerTool tool = McpServerTool.Create(ToolWithOutputSchemaAttribute, new() { SerializerOptions = CreateSerializerOptionsWithPerson() });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.Equal("object", tool.ProtocolTool.OutputSchema.Value.GetProperty("type").GetString());
+
+        var mockServer = new Mock<McpServer>();
+        var request = new RequestContext<CallToolRequestParams>(mockServer.Object, CreateTestJsonRpcRequest())
+        {
+            Params = new CallToolRequestParams { Name = "tool" },
+        };
+
+        var result = await tool.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.StructuredContent);
+        Assert.Equal("John", result.StructuredContent.Value.GetProperty("name").GetString());
+        Assert.Equal(27, result.StructuredContent.Value.GetProperty("age").GetInt32());
+        AssertMatchesJsonSchema(tool.ProtocolTool.OutputSchema.Value, result.StructuredContent);
+    }
+
+    [Fact]
+    public void OutputSchema_Attribute_WithoutUseStructuredContent_NoSchema()
+    {
+        // If UseStructuredContent is false but OutputSchema type is set, no output schema should be generated
+        McpServerTool tool = McpServerTool.Create(ToolWithOutputSchemaButNoStructuredContent, new() { SerializerOptions = CreateSerializerOptionsWithPerson() });
+
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void OutputSchema_Options_TakesPrecedenceOverAttribute()
+    {
+        // Options.OutputSchema should take precedence over attribute-derived schema
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"custom":{"type":"boolean"}},"required":["custom"]}""").RootElement;
+        McpServerTool tool = McpServerTool.Create(ToolWithOutputSchemaAttribute, new()
+        {
+            OutputSchema = outputSchema,
+        });
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("custom", out _));
+        // Should not have Person's properties
+        Assert.False(properties.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void OutputSchema_Options_Clone_PreservesValue()
+    {
+        // Verify that Clone() preserves the OutputSchema property
+        JsonElement outputSchema = JsonDocument.Parse("""{"type":"object","properties":{"x":{"type":"integer"}}}""").RootElement;
+        McpServerTool tool1 = McpServerTool.Create(() => "result", new()
+        {
+            Name = "tool1",
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+        });
+
+        // The output schema should be present since we set it
+        Assert.NotNull(tool1.ProtocolTool.OutputSchema);
+        Assert.True(tool1.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var props));
+        Assert.True(props.TryGetProperty("x", out _));
+    }
+
+    [Fact]
+    public async Task OutputSchema_Options_PersonType_WithCallToolResult()
+    {
+        // Create output schema from Person type, tool returns CallToolResult with matching structured content
+        JsonSerializerOptions serializerOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        JsonElement outputSchema = AIJsonUtilities.CreateJsonSchema(typeof(Person), serializerOptions: serializerOptions);
+        Person person = new("Alice", 30);
+        JsonElement structuredContent = JsonSerializer.SerializeToElement(person, serializerOptions);
+        McpServerTool tool = McpServerTool.Create(() => new CallToolResult()
+        {
+            Content = [new TextContentBlock { Text = "Alice, 30" }],
+            StructuredContent = structuredContent,
+        }, new()
+        {
+            Name = "tool",
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+            SerializerOptions = serializerOptions,
+        });
+        var mockServer = new Mock<McpServer>();
+        var request = new RequestContext<CallToolRequestParams>(mockServer.Object, CreateTestJsonRpcRequest())
+        {
+            Params = new CallToolRequestParams { Name = "tool" },
+        };
+
+        var result = await tool.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.NotNull(result.StructuredContent);
+        AssertMatchesJsonSchema(tool.ProtocolTool.OutputSchema.Value, result.StructuredContent);
+    }
+
+    [Fact]
+    public async Task OutputSchema_Options_OverridesReturnTypeSchema_InvokeAndValidate()
+    {
+        // OutputSchema overrides return type schema; result should match the original return type, but schema is the override
+        JsonSerializerOptions serializerOptions = new() { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+        JsonElement outputSchema = AIJsonUtilities.CreateJsonSchema(typeof(Person), serializerOptions: serializerOptions);
+        McpServerTool tool = McpServerTool.Create(() => new Person("Bob", 25), new()
+        {
+            Name = "tool",
+            UseStructuredContent = true,
+            OutputSchema = outputSchema,
+            SerializerOptions = serializerOptions,
+        });
+        var mockServer = new Mock<McpServer>();
+        var request = new RequestContext<CallToolRequestParams>(mockServer.Object, CreateTestJsonRpcRequest())
+        {
+            Params = new CallToolRequestParams { Name = "tool" },
+        };
+
+        var result = await tool.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        Assert.NotNull(result.StructuredContent);
+        AssertMatchesJsonSchema(tool.ProtocolTool.OutputSchema.Value, result.StructuredContent);
+    }
+
+    [McpServerTool(UseStructuredContent = true, OutputSchemaType = typeof(Person))]
+    private static CallToolResult ToolWithOutputSchemaAttribute()
+    {
+        var person = new Person("John", 27);
+        return new CallToolResult()
+        {
+            Content = [new TextContentBlock { Text = $"{person.Name}, {person.Age}" }],
+            StructuredContent = JsonSerializer.SerializeToElement(person, JsonContext2.Default.Person),
+        };
+    }
+
+    [McpServerTool(UseStructuredContent = false, OutputSchemaType = typeof(Person))]
+    private static CallToolResult ToolWithOutputSchemaButNoStructuredContent()
+    {
+        return new CallToolResult()
+        {
+            Content = [new TextContentBlock { Text = "result" }],
+        };
     }
 
     [Theory]
@@ -653,15 +921,15 @@ public partial class McpServerToolTests
         }
     }
 
-    private static void AssertMatchesJsonSchema(JsonElement schemaDoc, JsonNode? value)
+    private static void AssertMatchesJsonSchema(JsonElement schemaDoc, JsonElement? value)
     {
         JsonSchema schema = JsonSerializer.Deserialize(schemaDoc, JsonContext2.Default.JsonSchema)!;
         EvaluationOptions options = new() { OutputFormat = OutputFormat.List };
-        EvaluationResults results = schema.Evaluate(value, options);
+        EvaluationResults results = schema.Evaluate(value!.Value, options);
         if (!results.IsValid)
         {
-            IEnumerable<string> errors = results.Details
-                .Where(d => d.HasErrors)
+            IEnumerable<string> errors = (results.Details ?? [])
+                .Where(d => d.Errors?.Count > 0)
                 .SelectMany(d => d.Errors!.Select(error => $"Path:${d.InstanceLocation} {error.Key}:{error.Value}"));
 
             throw new XunitException($"""
@@ -669,7 +937,7 @@ public partial class McpServerToolTests
                 Schema:
                 {JsonSerializer.Serialize(schema)}
                 Instance:
-                {value?.ToJsonString() ?? "null"}
+                {value?.ToString() ?? "null"}
                 Errors:
                 {string.Join(Environment.NewLine, errors)}
                 """);
@@ -678,13 +946,20 @@ public partial class McpServerToolTests
 
     record Person(string Name, int Age);
 
+    private static JsonSerializerOptions CreateSerializerOptionsWithPerson()
+    {
+        JsonSerializerOptions options = new(McpJsonUtilities.DefaultOptions);
+        options.TypeInfoResolverChain.Add(JsonContext2.Default);
+        return options;
+    }
+
     [Fact]
     public void SupportsIconsInCreateOptions()
     {
         var icons = new List<Icon>
         {
-            new() { Source = "https://example.com/icon.png", MimeType = "image/png", Sizes = new List<string> { "48x48" } },
-            new() { Source = "https://example.com/icon.svg", MimeType = "image/svg+xml", Sizes = new List<string> { "any" } }
+            new() { Source = "https://example.com/icon.png", MimeType = "image/png", Sizes = ["48x48"] },
+            new() { Source = "https://example.com/icon.svg", MimeType = "image/svg+xml", Sizes = ["any"] }
         };
 
         McpServerTool tool = McpServerTool.Create(() => "test", new McpServerToolCreateOptions
@@ -743,7 +1018,182 @@ public partial class McpServerToolTests
         Assert.Null(tool.ProtocolTool.Icons);
     }
 
+    [Fact]
+    public void ReturnDescription_StructuredOutputDisabled_IncludedInToolDescription()
+    {
+        // When UseStructuredContent is false (default), return description should be appended to tool description
+        McpServerTool tool = McpServerTool.Create(ToolWithReturnDescription);
+
+        Assert.Equal("Tool that returns data.\nReturns: The computed result", tool.ProtocolTool.Description);
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void ReturnDescription_StructuredOutputEnabled_NotIncludedInToolDescription()
+    {
+        // When UseStructuredContent is true, return description should be in the output schema, not in tool description
+        McpServerTool tool = McpServerTool.Create(ToolWithReturnDescription, new() { UseStructuredContent = true });
+
+        Assert.Equal("Tool that returns data.", tool.ProtocolTool.Description);
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+        // Verify the output schema contains the description
+        Assert.True(tool.ProtocolTool.OutputSchema.Value.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("result", out var result));
+        Assert.True(result.TryGetProperty("description", out var description));
+        Assert.Equal("The computed result", description.GetString());
+    }
+
+    [Fact]
+    public void ReturnDescription_NoFunctionDescription_OnlyReturnsDescription()
+    {
+        // When there's no function description but there's a return description
+        McpServerTool tool = McpServerTool.Create(ToolWithOnlyReturnDescription);
+
+        Assert.Equal("Returns: The computed result", tool.ProtocolTool.Description);
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void ReturnDescription_ExplicitDescriptionOption_SynthesizesWithReturnDescription()
+    {
+        // When Description is explicitly set in options and there's a return description,
+        // the return description should be appended since UseStructuredContent is false
+        McpServerTool tool = McpServerTool.Create(ToolWithReturnDescription, new() { Description = "Custom description" });
+
+        Assert.Equal("Custom description\nReturns: The computed result", tool.ProtocolTool.Description);
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void ReturnDescription_NoReturnDescription_NoChange()
+    {
+        // When there's no return description, the tool description should remain unchanged
+        McpServerTool tool = McpServerTool.Create(ToolWithoutReturnDescription);
+
+        Assert.Equal("Tool without return description.", tool.ProtocolTool.Description);
+        Assert.Null(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public void ReturnDescription_StructuredOutputEnabled_WithExplicitDescription_NoSynthesis()
+    {
+        // When UseStructuredContent is true and Description is set, return description goes to output schema
+        McpServerTool tool = McpServerTool.Create(ToolWithReturnDescription, new()
+        {
+            Description = "Custom description",
+            UseStructuredContent = true
+        });
+
+        // Description should not have the return description appended
+        Assert.Equal("Custom description", tool.ProtocolTool.Description);
+        Assert.NotNull(tool.ProtocolTool.OutputSchema);
+    }
+
+    [Fact]
+    public async Task EnablePollingAsync_ThrowsInvalidOperationException_WhenTransportIsNotStreamableHttpPost()
+    {
+        // Arrange
+        Mock<McpServer> mockServer = new();
+        var jsonRpcRequest = CreateTestJsonRpcRequest();
+
+        // The JsonRpcRequest has no Context, so RelatedTransport will be null
+        var requestContext = new RequestContext<CallToolRequestParams>(mockServer.Object, jsonRpcRequest);
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => requestContext.EnablePollingAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Contains("Streamable HTTP", exception.Message);
+    }
+
+    [Fact]
+    public void AsyncTool_AutomaticallyMarkedWithTaskSupport()
+    {
+        // Async tools should automatically get TaskSupport = Optional
+        McpServerTool tool = McpServerTool.Create(AsyncToolReturningTask);
+
+        Assert.NotNull(tool.ProtocolTool.Execution);
+        Assert.Equal(ToolTaskSupport.Optional, tool.ProtocolTool.Execution.TaskSupport);
+    }
+
+    [Fact]
+    public void AsyncTool_ValueTask_AutomaticallyMarkedWithTaskSupport()
+    {
+        // Async tools returning ValueTask should also get TaskSupport = Optional
+        McpServerTool tool = McpServerTool.Create(AsyncToolReturningValueTask);
+
+        Assert.NotNull(tool.ProtocolTool.Execution);
+        Assert.Equal(ToolTaskSupport.Optional, tool.ProtocolTool.Execution.TaskSupport);
+    }
+
+    [Fact]
+    public void AsyncTool_TaskOfT_AutomaticallyMarkedWithTaskSupport()
+    {
+        // Async tools returning Task<T> should get TaskSupport = Optional
+        McpServerTool tool = McpServerTool.Create(AsyncToolReturningTaskOfT);
+
+        Assert.NotNull(tool.ProtocolTool.Execution);
+        Assert.Equal(ToolTaskSupport.Optional, tool.ProtocolTool.Execution.TaskSupport);
+    }
+
+    [Fact]
+    public void AsyncTool_ValueTaskOfT_AutomaticallyMarkedWithTaskSupport()
+    {
+        // Async tools returning ValueTask<T> should get TaskSupport = Optional
+        McpServerTool tool = McpServerTool.Create(AsyncToolReturningValueTaskOfT);
+
+        Assert.NotNull(tool.ProtocolTool.Execution);
+        Assert.Equal(ToolTaskSupport.Optional, tool.ProtocolTool.Execution.TaskSupport);
+    }
+
+    [Fact]
+    public void SyncTool_NotMarkedWithTaskSupport()
+    {
+        // Synchronous tools should not have TaskSupport set
+        McpServerTool tool = McpServerTool.Create(SyncTool);
+
+        Assert.Null(tool.ProtocolTool.Execution);
+    }
+
+    private static async Task AsyncToolReturningTask()
+    {
+        await Task.Yield();
+    }
+
+    private static async ValueTask AsyncToolReturningValueTask()
+    {
+        await Task.Yield();
+    }
+
+    private static async Task<string> AsyncToolReturningTaskOfT()
+    {
+        await Task.Yield();
+        return "result";
+    }
+
+    private static async ValueTask<string> AsyncToolReturningValueTaskOfT()
+    {
+        await Task.Yield();
+        return "result";
+    }
+
+    private static string SyncTool()
+    {
+        return "sync result";
+    }
+
+    [Description("Tool that returns data.")]
+    [return: Description("The computed result")]
+    private static string ToolWithReturnDescription() => "result";
+
+    [return: Description("The computed result")]
+    private static string ToolWithOnlyReturnDescription() => "result";
+
+    [Description("Tool without return description.")]
+    private static string ToolWithoutReturnDescription() => "result";
+
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+    [JsonSerializable(typeof(JsonNode))]
     [JsonSerializable(typeof(DisposableToolType))]
     [JsonSerializable(typeof(AsyncDisposableToolType))]
     [JsonSerializable(typeof(AsyncDisposableAndDisposableToolType))]
@@ -752,5 +1202,6 @@ public partial class McpServerToolTests
     [JsonSerializable(typeof(List<string>))]
     [JsonSerializable(typeof(int?))]
     [JsonSerializable(typeof(DateTimeOffset?))]
+    [JsonSerializable(typeof(Person))]
     partial class JsonContext2 : JsonSerializerContext;
 }

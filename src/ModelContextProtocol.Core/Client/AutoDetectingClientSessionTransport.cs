@@ -93,6 +93,11 @@ internal sealed partial class AutoDetectingClientSessionTransport : ITransport
 
     private async Task InitializeSseTransportAsync(JsonRpcMessage message, CancellationToken cancellationToken)
     {
+        if (_options.KnownSessionId is not null)
+        {
+            throw new InvalidOperationException("Streamable HTTP transport is required to resume an existing session.");
+        }
+
         var sseTransport = new SseClientSessionTransport(_name, _options, _httpClient, _messageChannel, _loggerFactory);
 
         try
@@ -109,16 +114,6 @@ internal sealed partial class AutoDetectingClientSessionTransport : ITransport
             await sseTransport.DisposeAsync().ConfigureAwait(false);
             throw;
         }
-    }
-
-    /// <inheritdoc/>
-    public bool IsAlive => ActiveTransport?.IsAlive ?? false;
-
-    /// <inheritdoc/>
-    public event EventHandler? ProcessTerminated
-    {
-        add => ActiveTransport!.ProcessTerminated += value;
-        remove => ActiveTransport!.ProcessTerminated -= value;
     }
 
     public async ValueTask DisposeAsync()

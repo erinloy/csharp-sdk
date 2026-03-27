@@ -1,4 +1,5 @@
 using ModelContextProtocol.Protocol;
+using System.Net.ServerSentEvents;
 using System.Security.Claims;
 using System.Threading.Channels;
 
@@ -27,14 +28,17 @@ namespace ModelContextProtocol.Server;
 /// <param name="sessionId">The identifier corresponding to the current MCP session.</param>
 public sealed class SseResponseStreamTransport(Stream sseResponseStream, string? messageEndpoint = "/message", string? sessionId = null) : ITransport
 {
-    private readonly SseWriter _sseWriter = new(messageEndpoint);
     private readonly Channel<JsonRpcMessage> _incomingChannel = Channel.CreateBounded<JsonRpcMessage>(new BoundedChannelOptions(1)
     {
         SingleReader = true,
         SingleWriter = false,
     });
+    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly TaskCompletionSource<bool> _completedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly SseEventWriter _sseWriter = new(sseResponseStream);
 
     private bool _isConnected;
+    private bool _disposed;
 
     /// <summary>
     /// Starts the transport and writes the JSON-RPC messages sent via <see cref="SendMessageAsync"/>
@@ -45,7 +49,14 @@ public sealed class SseResponseStreamTransport(Stream sseResponseStream, string?
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         _isConnected = true;
-        await _sseWriter.WriteAllAsync(sseResponseStream, cancellationToken).ConfigureAwait(false);
+
+        // Write the endpoint event first
+        if (messageEndpoint is not null)
+        {
+            await _sseWriter.WriteAsync(SseItem.Endpoint(messageEndpoint), cancellationToken).ConfigureAwait(false);
+        }
+
+        await _completedTcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -55,27 +66,36 @@ public sealed class SseResponseStreamTransport(Stream sseResponseStream, string?
     public string? SessionId { get; } = sessionId;
 
     /// <inheritdoc/>
-    public bool IsAlive => _isConnected;
-
-    /// <inheritdoc/>
-#pragma warning disable CS0067 // Event never used (only applicable to stdio transports)
-    public event EventHandler? ProcessTerminated;
-#pragma warning restore CS0067
-
-    /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        using var _ = await _lock.LockAsync().ConfigureAwait(false);
+
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _isConnected = false;
         _incomingChannel.Writer.TryComplete();
-        await _sseWriter.DisposeAsync().ConfigureAwait(false);
+        _completedTcs.TrySetResult(true);
+        _sseWriter.Dispose();
     }
 
     /// <inheritdoc/>
     public async Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
     {
         Throw.IfNull(message);
-        // If the underlying writer has been disposed, just drop the message.
-        await _sseWriter.SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
+
+        using var _ = await _lock.LockAsync(cancellationToken).ConfigureAwait(false);
+
+        // If disposed, just drop the message.
+        if (_disposed)
+        {
+            return;
+        }
+
+        await _sseWriter.WriteAsync(SseItem.Message(message), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -84,7 +104,8 @@ public sealed class SseResponseStreamTransport(Stream sseResponseStream, string?
     /// <param name="message">The JSON-RPC message received from the client.</param>
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests. The default is <see cref="CancellationToken.None"/>.</param>
     /// <returns>A task representing the asynchronous operation to buffer the JSON-RPC message for processing.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when there is an attempt to process a message before calling <see cref="RunAsync(CancellationToken)"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="message"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">There is an attempt to process a message before calling <see cref="RunAsync(CancellationToken)"/>.</exception>
     /// <remarks>
     /// <para>
     /// This method is the entry point for processing client-to-server communication in the SSE transport model.

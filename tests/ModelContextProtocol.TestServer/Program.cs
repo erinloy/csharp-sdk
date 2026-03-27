@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -81,7 +81,7 @@ internal static class Program
                         Params = JsonSerializer.SerializeToNode(new LoggingMessageNotificationParams
                         {
                             Level = logLevel,
-                            Data = JsonSerializer.Deserialize<JsonElement>("\"Random log message\"")
+                            Data = JsonElement.Parse("\"Random log message\"")
                         })
                     }, cancellationToken);
                 }
@@ -117,7 +117,7 @@ internal static class Program
                     {
                         Name = "echo",
                         Description = "Echoes the input back to the client.",
-                        InputSchema = JsonSerializer.Deserialize<JsonElement>("""
+                        InputSchema = JsonElement.Parse("""
                             {
                                 "type": "object",
                                 "properties": {
@@ -134,17 +134,17 @@ internal static class Program
                     {
                         Name = "echoSessionId",
                         Description = "Echoes the session id back to the client.",
-                        InputSchema = JsonSerializer.Deserialize<JsonElement>("""
+                        InputSchema = JsonElement.Parse("""
                             {
                                 "type": "object"
                             }
-                            """, McpJsonUtilities.DefaultOptions),
+                            """),
                     },
                     new Tool
                     {
-                        Name = "sampleLLM",
-                        Description = "Samples from an LLM using MCP's sampling feature.",
-                        InputSchema = JsonSerializer.Deserialize<JsonElement>("""
+                        Name = "trigger-sampling-request",
+                        Description = "Trigger a Request from the Server for LLM Sampling",
+                        InputSchema = JsonElement.Parse("""
                             {
                                 "type": "object",
                                 "properties": {
@@ -160,6 +160,44 @@ internal static class Program
                                 "required": ["prompt", "maxTokens"]
                             }
                             """),
+                    },
+                    new Tool
+                    {
+                        Name = "longRunning",
+                        Description = "Simulates a long-running operation that supports task-based execution.",
+                        InputSchema = JsonElement.Parse("""
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "durationMs": {
+                                        "type": "number",
+                                        "description": "Duration of the operation in milliseconds"
+                                    }
+                                },
+                                "required": ["durationMs"]
+                            }
+                            """),
+                        Execution = new ToolExecution
+                        {
+                            TaskSupport = ToolTaskSupport.Optional
+                        }
+                    },
+                    new Tool
+                    {
+                        Name = "crash",
+                        Description = "Terminates the server process with a specified exit code.",
+                        InputSchema = JsonElement.Parse("""
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "exitCode": {
+                                        "type": "number",
+                                        "description": "The exit code to terminate with"
+                                    }
+                                },
+                                "required": ["exitCode"]
+                            }
+                            """),
                     }
                 ]
             };
@@ -170,7 +208,7 @@ internal static class Program
             {
                 if (request.Params?.Arguments is null || !request.Params.Arguments.TryGetValue("message", out var message))
                 {
-                    throw new McpException("Missing required argument 'message'", McpErrorCode.InvalidParams);
+                    throw new McpProtocolException("Missing required argument 'message'", McpErrorCode.InvalidParams);
                 }
                 return new CallToolResult
                 {
@@ -184,20 +222,20 @@ internal static class Program
                     Content = [new TextContentBlock { Text = request.Server.SessionId ?? string.Empty }]
                 };
             }
-            else if (request.Params?.Name == "sampleLLM")
+            else if (request.Params?.Name == "trigger-sampling-request")
             {
                 if (request.Params?.Arguments is null ||
                     !request.Params.Arguments.TryGetValue("prompt", out var prompt) ||
                     !request.Params.Arguments.TryGetValue("maxTokens", out var maxTokens))
                 {
-                    throw new McpException("Missing required arguments 'prompt' and 'maxTokens'", McpErrorCode.InvalidParams);
+                    throw new McpProtocolException("Missing required arguments 'prompt' and 'maxTokens'", McpErrorCode.InvalidParams);
                 }
-                var sampleResult = await request.Server.SampleAsync(CreateRequestSamplingParams(prompt.ToString(), "sampleLLM", Convert.ToInt32(maxTokens.GetRawText())),
-                    cancellationToken);
+                var sampleResult = await request.Server.SampleAsync(CreateRequestSamplingParams(prompt.ToString(), "trigger-sampling-request", Convert.ToInt32(maxTokens.GetRawText())),
+                    cancellationToken: cancellationToken);
 
                 return new CallToolResult
                 {
-                    Content = [new TextContentBlock { Text = $"LLM sampling result: {(sampleResult.Content as TextContentBlock)?.Text}" }]
+                    Content = [new TextContentBlock { Text = $"LLM sampling result: {sampleResult.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text}" }]
                 };
             }
             else if (request.Params?.Name == "echoCliArg")
@@ -207,9 +245,33 @@ internal static class Program
                     Content = [new TextContentBlock { Text = cliArg ?? "null" }]
                 };
             }
+            else if (request.Params?.Name == "longRunning")
+            {
+                if (request.Params?.Arguments is null || !request.Params.Arguments.TryGetValue("durationMs", out var durationMsValue))
+                {
+                    throw new McpProtocolException("Missing required argument 'durationMs'", McpErrorCode.InvalidParams);
+                }
+                int durationMs = Convert.ToInt32(durationMsValue.GetRawText());
+                await Task.Delay(durationMs, cancellationToken);
+                return new CallToolResult
+                {
+                    Content = [new TextContentBlock { Text = $"Long-running operation completed after {durationMs}ms" }]
+                };
+            }
+            else if (request.Params?.Name == "crash")
+            {
+                if (request.Params?.Arguments is null || !request.Params.Arguments.TryGetValue("exitCode", out var exitCodeValue))
+                {
+                    throw new McpProtocolException("Missing required argument 'exitCode'", McpErrorCode.InvalidParams);
+                }
+                int exitCode = Convert.ToInt32(exitCodeValue.GetRawText());
+                Console.Error.WriteLine($"Crashing with exit code {exitCode}");
+                Environment.Exit(exitCode);
+                throw new Exception("unreachable");
+            }
             else
             {
-                throw new McpException($"Unknown tool: {request.Params?.Name}", McpErrorCode.InvalidParams);
+                throw new McpProtocolException($"Unknown tool: {request.Params?.Name}", McpErrorCode.InvalidParams);
             }
         };
     }
@@ -223,26 +285,46 @@ internal static class Program
                 Prompts = [
                     new Prompt
                     {
-                        Name = "simple_prompt",
+                        Name = "simple-prompt",
                         Description = "A prompt without arguments"
                     },
                     new Prompt
                     {
-                        Name = "complex_prompt",
+                        Name = "args-prompt",
                         Description = "A prompt with arguments",
                         Arguments =
                         [
                             new PromptArgument
                             {
-                                Name = "temperature",
-                                Description = "Temperature setting",
+                                Name = "city",
+                                Description = "Name of the city",
                                 Required = true
                             },
                             new PromptArgument
                             {
-                                Name = "style",
-                                Description = "Output style",
+                                Name = "state",
+                                Description = "Name of the state",
                                 Required = false
+                            }
+                        ]
+                    },
+                    new Prompt
+                    {
+                        Name = "completable-prompt",
+                        Description = "A prompt with completable arguments",
+                        Arguments =
+                        [
+                            new PromptArgument
+                            {
+                                Name = "department",
+                                Description = "Choose the department",
+                                Required = true
+                            },
+                            new PromptArgument
+                            {
+                                Name = "name",
+                                Description = "Choose a team member",
+                                Required = true
                             }
                         ]
                     }
@@ -253,7 +335,7 @@ internal static class Program
         options.Handlers.GetPromptHandler = async (request, cancellationToken) =>
         {
             List<PromptMessage> messages = [];
-            if (request.Params?.Name == "simple_prompt")
+            if (request.Params?.Name == "simple-prompt")
             {
                 messages.Add(new PromptMessage
                 {
@@ -261,33 +343,30 @@ internal static class Program
                     Content = new TextContentBlock { Text = "This is a simple prompt without arguments." },
                 });
             }
-            else if (request.Params?.Name == "complex_prompt")
+            else if (request.Params?.Name == "args-prompt")
             {
-                string temperature = request.Params.Arguments?["temperature"].ToString() ?? "unknown";
-                string style = request.Params.Arguments?["style"].ToString() ?? "unknown";
+                string city = request.Params.Arguments?["city"].ToString() ?? "unknown";
+                string state = request.Params.Arguments?["state"].ToString() ?? "";
+                string location = !string.IsNullOrEmpty(state) ? $"{city}, {state}" : city;
                 messages.Add(new PromptMessage
                 {
                     Role = Role.User,
-                    Content = new TextContentBlock { Text = $"This is a complex prompt with arguments: temperature={temperature}, style={style}" },
+                    Content = new TextContentBlock { Text = $"What's weather in {location}?" },
                 });
-                messages.Add(new PromptMessage
-                {
-                    Role = Role.Assistant,
-                    Content = new TextContentBlock { Text = "I understand. You've provided a complex prompt with temperature and style arguments. How would you like me to proceed?" },
-                });
+            }
+            else if (request.Params?.Name == "completable-prompt")
+            {
+                string department = request.Params.Arguments?["department"].ToString() ?? "unknown";
+                string name = request.Params.Arguments?["name"].ToString() ?? "unknown";
                 messages.Add(new PromptMessage
                 {
                     Role = Role.User,
-                    Content = new ImageContentBlock
-                    {
-                        Data = MCP_TINY_IMAGE,
-                        MimeType = "image/png"
-                    }
+                    Content = new TextContentBlock { Text = $"Please promote {name} to the head of the {department} team." },
                 });
             }
             else
             {
-                throw new McpException($"Unknown prompt: {request.Params?.Name}", McpErrorCode.InvalidParams);
+                throw new McpProtocolException($"Unknown prompt: {request.Params?.Name}", McpErrorCode.InvalidParams);
             }
 
             return new GetPromptResult
@@ -305,7 +384,7 @@ internal static class Program
         {
             if (request.Params?.Level is null)
             {
-                throw new McpException("Missing required argument 'level'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException("Missing required argument 'level'", McpErrorCode.InvalidParams);
             }
 
             _minimumLoggingLevel = request.Params.Level;
@@ -350,12 +429,7 @@ internal static class Program
                     Name = $"Resource {i + 1}",
                     MimeType = "application/octet-stream"
                 });
-                resourceContents.Add(new BlobResourceContents
-                {
-                    Uri = uri,
-                    MimeType = "application/octet-stream",
-                    Blob = Convert.ToBase64String(buffer)
-                });
+                resourceContents.Add(BlobResourceContents.FromBytes(buffer, uri, "application/octet-stream"));
             }
         }
 
@@ -387,7 +461,7 @@ internal static class Program
                 }
                 catch (Exception e)
                 {
-                    throw new McpException($"Invalid cursor: '{request.Params.Cursor}'", e, McpErrorCode.InvalidParams);
+                    throw new McpProtocolException($"Invalid cursor: '{request.Params.Cursor}'", e, McpErrorCode.InvalidParams);
                 }
             }
 
@@ -409,7 +483,7 @@ internal static class Program
         {
             if (request.Params?.Uri is null)
             {
-                throw new McpException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
             }
 
             if (request.Params.Uri.StartsWith("test://dynamic/resource/"))
@@ -417,7 +491,7 @@ internal static class Program
                 var id = request.Params.Uri.Split('/').LastOrDefault();
                 if (string.IsNullOrEmpty(id))
                 {
-                    throw new McpException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
+                    throw new McpProtocolException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
                 }
 
                 return new ReadResourceResult
@@ -434,7 +508,7 @@ internal static class Program
             }
 
             ResourceContents contents = resourceContents.FirstOrDefault(r => r.Uri == request.Params.Uri)
-                ?? throw new McpException($"Resource not found: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
+                ?? throw new McpProtocolException($"Resource not found: '{request.Params.Uri}'", McpErrorCode.ResourceNotFound);
 
             return new ReadResourceResult
             {
@@ -446,12 +520,12 @@ internal static class Program
         {
             if (request?.Params?.Uri is null)
             {
-                throw new McpException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
             }
             if (!request.Params.Uri.StartsWith("test://static/resource/")
                 && !request.Params.Uri.StartsWith("test://dynamic/resource/"))
             {
-                throw new McpException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
             }
 
             _subscribedResources.TryAdd(request.Params.Uri, true);
@@ -463,12 +537,12 @@ internal static class Program
         {
             if (request?.Params?.Uri is null)
             {
-                throw new McpException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException("Missing required argument 'uri'", McpErrorCode.InvalidParams);
             }
             if (!request.Params.Uri.StartsWith("test://static/resource/")
                 && !request.Params.Uri.StartsWith("test://dynamic/resource/"))
             {
-                throw new McpException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
+                throw new McpProtocolException($"Invalid resource URI: '{request.Params.Uri}'", McpErrorCode.InvalidParams);
             }
 
             _subscribedResources.TryRemove(request.Params.Uri, out _);
@@ -482,8 +556,8 @@ internal static class Program
         List<string> sampleResourceIds = ["1", "2", "3", "4", "5"];
         Dictionary<string, List<string>> exampleCompletions = new()
         {
-            {"style", ["casual", "formal", "technical", "friendly"]},
-            {"temperature", ["0", "0.5", "0.7", "1.0"]},
+            {"department", ["Engineering", "Sales", "Marketing", "Support"]},
+            {"name", ["Alice", "Bob", "Charlie"]},
         };
 
         options.Handlers.CompleteHandler = async (request, cancellationToken) =>
@@ -509,7 +583,7 @@ internal static class Program
                     return new CompleteResult { Completion = new() { Values = values, HasMore = false, Total = values.Length } };
 
                 default:
-                    throw new McpException($"Unknown reference type: '{request.Params?.Ref.Type}'", McpErrorCode.InvalidParams);
+                    throw new McpProtocolException($"Unknown reference type: '{request.Params?.Ref.Type}'", McpErrorCode.InvalidParams);
             }
         };
     }
@@ -521,7 +595,7 @@ internal static class Program
             Messages = [new SamplingMessage
                 {
                     Role = Role.User,
-                    Content = new TextContentBlock { Text = $"Resource {uri} context: {context}" },
+                    Content = [new TextContentBlock { Text = $"Resource {uri} context: {context}" }],
                 }],
             SystemPrompt = "You are a helpful test server.",
             MaxTokens = maxTokens,

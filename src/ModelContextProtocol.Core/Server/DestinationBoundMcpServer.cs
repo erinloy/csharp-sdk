@@ -3,7 +3,9 @@ using System.Diagnostics;
 
 namespace ModelContextProtocol.Server;
 
+#pragma warning disable MCPEXP002
 internal sealed class DestinationBoundMcpServer(McpServerImpl server, ITransport? transport) : McpServer
+#pragma warning restore MCPEXP002
 {
     public override string? SessionId => transport?.SessionId ?? server.SessionId;
     public override string? NegotiatedProtocolVersion => server.NegotiatedProtocolVersion;
@@ -27,8 +29,11 @@ internal sealed class DestinationBoundMcpServer(McpServerImpl server, ITransport
             throw new ArgumentException("Only transports can provide a JsonRpcMessageContext.");
         }
 
-        message.Context = new JsonRpcMessageContext();
-        message.Context.RelatedTransport = transport;
+        message.Context = new()
+        {
+            RelatedTransport = transport
+        };
+
         return server.SendMessageAsync(message, cancellationToken);
     }
 
@@ -39,8 +44,11 @@ internal sealed class DestinationBoundMcpServer(McpServerImpl server, ITransport
             throw new ArgumentException("Only transports can provide a JsonRpcMessageContext.");
         }
 
-        request.Context = new JsonRpcMessageContext();
-        request.Context.RelatedTransport = transport;
+        request.Context = new()
+        {
+            RelatedTransport = transport
+        };
+
         return server.SendRequestAsync(request, cancellationToken);
     }
 }

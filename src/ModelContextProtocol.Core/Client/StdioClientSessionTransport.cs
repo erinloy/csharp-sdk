@@ -1,80 +1,25 @@
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
-using System.Threading;
-using System.IO;
 
 namespace ModelContextProtocol.Client;
 
 /// <summary>Provides the client side of a stdio-based session transport.</summary>
-internal sealed partial class StdioClientSessionTransport : StreamClientSessionTransport
+internal sealed class StdioClientSessionTransport : StreamClientSessionTransport
 {
     private readonly StdioClientTransportOptions _options;
     private readonly Process _process;
     private readonly Queue<string> _stderrRollingLog;
+    private int _cleanedUp = 0;
+    private readonly int? _processId;
 
-    public StdioClientSessionTransport(StdioClientTransportOptions options, Process process, string endpointName, Queue<string> stderrRollingLog, ILoggerFactory? loggerFactory)
-        : base(process.StandardInput.BaseStream, process.StandardOutput.BaseStream, encoding: null, endpointName, loggerFactory)
+    public StdioClientSessionTransport(StdioClientTransportOptions options, Process process, string endpointName, Queue<string> stderrRollingLog, ILoggerFactory? loggerFactory) :
+        base(process.StandardInput.BaseStream, process.StandardOutput.BaseStream, encoding: null, endpointName, loggerFactory)
     {
-        _process = process;
         _options = options;
+        _process = process;
         _stderrRollingLog = stderrRollingLog;
-
-        // Monitor process exit to proactively detect disconnection
-        // This ensures the Disconnected event fires when the stdio process exits,
-        // not just when we try to send a message and fail
-        if (process.EnableRaisingEvents)
-        {
-            process.Exited += async (sender, e) =>
-            {
-                // Process has exited - fire ProcessTerminated event first
-                // This allows consumers (like Nexus) to know the process is gone
-                // BEFORE cleanup starts, enabling them to wait for process termination
-                // before starting reconnection
-                try
-                {
-                    OnProcessTerminated();
-                }
-                catch
-                {
-                    // Ignore errors from event handlers
-                }
-
-                // Then trigger disconnection cleanup
-                // Use Task.Run to avoid blocking the Exited event handler
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        // CleanupAsync will detect the process exit and raise the Disconnected event
-                        await CleanupAsync(null, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // Ignore errors during proactive cleanup
-                        // The disconnection will be handled when the next operation occurs
-                    }
-                });
-            };
-        }
-    }
-
-    /// <inheritdoc/>
-    public override bool IsAlive
-    {
-        get
-        {
-            try
-            {
-                // Check if the process is still running
-                return base.IsAlive && !_process.HasExited;
-            }
-            catch
-            {
-                // If we can't check the process state, assume it's not alive
-                return false;
-            }
-        }
+        try { _processId = process.Id; } catch { }
     }
 
     /// <inheritdoc/>
@@ -82,7 +27,7 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
     {
         try
         {
-            await base.SendMessageAsync(message, cancellationToken);
+            await base.SendMessageAsync(message, cancellationToken).ConfigureAwait(false);
         }
         catch (IOException)
         {
@@ -100,20 +45,36 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
     /// <inheritdoc/>
     protected override async ValueTask CleanupAsync(Exception? error = null, CancellationToken cancellationToken = default)
     {
+        // Only clean up once.
+        if (Interlocked.Exchange(ref _cleanedUp, 1) != 0)
+        {
+            return;
+        }
+
         // We've not yet forcefully terminated the server. If it's already shut down, something went wrong,
         // so create an exception with details about that.
         error ??= await GetUnexpectedExitExceptionAsync(cancellationToken).ConfigureAwait(false);
 
-        // Now terminate the server process.
+        // Terminate the server process (or confirm it already exited), then build
+        // and publish strongly-typed completion details while the process handle
+        // is still valid so we can read the exit code.
         try
         {
-            StdioClientTransport.DisposeProcess(_process, processRunning: true, _options.ShutdownTimeout, Name);
+            StdioClientTransport.DisposeProcess(
+                _process, 
+                processRunning: true,
+                _options.ShutdownTimeout,
+                beforeDispose: () => SetDisconnected(new TransportClosedException(BuildCompletionDetails(error))));
         }
         catch (Exception ex)
         {
             LogTransportShutdownFailed(Name, ex);
+            SetDisconnected(new TransportClosedException(BuildCompletionDetails(error)));
         }
 
+        // And handle cleanup in the base type. SetDisconnected has already been
+        // called above, so the base call is a no-op for disconnect state but
+        // still performs other cleanup (cancelling the read task, etc.).
         await base.CleanupAsync(error, cancellationToken).ConfigureAwait(false);
     }
 
@@ -128,11 +89,13 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
         try
         {
             // The process has exited, but we still need to ensure stderr has been flushed.
+            // WaitForExitAsync only waits for exit; it does not guarantee that all
+            // ErrorDataReceived events have been dispatched. The synchronous WaitForExit()
+            // (no arguments) does ensure that, so call it after WaitForExitAsync completes.
 #if NET
             await _process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-#else
-            _process.WaitForExit();
 #endif
+            _process.WaitForExit();
         }
         catch { }
 
@@ -157,5 +120,33 @@ internal sealed partial class StdioClientSessionTransport : StreamClientSessionT
         }
 
         return new IOException(errorMessage);
+    }
+
+    private StdioClientCompletionDetails BuildCompletionDetails(Exception? error)
+    {
+        StdioClientCompletionDetails details = new()
+        {
+            Exception = error,
+            ProcessId = _processId,
+        };
+        
+        try
+        {
+            if (StdioClientTransport.HasExited(_process))
+            {
+                details.ExitCode = _process.ExitCode;
+            }
+        }
+        catch { }
+
+        lock (_stderrRollingLog)
+        {
+            if (_stderrRollingLog.Count > 0)
+            {
+                details.StandardErrorTail = _stderrRollingLog.ToArray();
+            }
+        }
+
+        return details;
     }
 }

@@ -1,3 +1,4 @@
+﻿using System.Diagnostics.CodeAnalysis;
 using ModelContextProtocol.Protocol;
 
 namespace ModelContextProtocol.Client;
@@ -5,10 +6,16 @@ namespace ModelContextProtocol.Client;
 /// <summary>
 /// Represents an instance of a Model Context Protocol (MCP) client session that connects to and communicates with an MCP server.
 /// </summary>
-#pragma warning disable CS0618 // Type or member is obsolete
-public abstract partial class McpClient : McpSession, IMcpClient
-#pragma warning restore CS0618 // Type or member is obsolete
+public abstract partial class McpClient : McpSession
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="McpClient"/> class.
+    /// </summary>
+    [Experimental(Experimentals.Subclassing_DiagnosticId, UrlFormat = Experimentals.Subclassing_Url)]
+    protected McpClient()
+    {
+    }
+
     /// <summary>
     /// Gets the capabilities supported by the connected server.
     /// </summary>
@@ -37,46 +44,30 @@ public abstract partial class McpClient : McpSession, IMcpClient
     /// <remarks>
     /// <para>
     /// This property contains instructions provided by the server during initialization that explain
-    /// how to effectively use its capabilities. These instructions can include details about available
-    /// tools, expected input formats, limitations, or any other helpful information.
+    /// how to effectively use its capabilities. They should focus on guidance that helps a model
+    /// use the server effectively and should avoid duplicating tool, prompt, or resource descriptions.
     /// </para>
     /// <para>
-    /// This can be used by clients to improve an LLM's understanding of available tools, prompts, and resources.
-    /// It can be thought of like a "hint" to the model and may be added to a system prompt.
+    /// This can be used by clients to improve an LLM's understanding of how to use the server.
+    /// It can be thought of like a "hint" to the model and can be added to a system prompt.
     /// </para>
     /// </remarks>
     public abstract string? ServerInstructions { get; }
 
     /// <summary>
-    /// Gets a value indicating whether the client is currently connected to the server.
-    /// </summary>
-    public abstract bool IsConnected { get; }
-
-    /// <summary>
-    /// Occurs when the client successfully connects to the server.
-    /// </summary>
-    public abstract event EventHandler<ConnectedEventArgs>? Connected;
-
-    /// <summary>
-    /// Occurs when the client disconnects from the server.
-    /// </summary>
-    public abstract event EventHandler<DisconnectedEventArgs>? Disconnected;
-
-    /// <summary>
-    /// Occurs when a connection error is detected.
-    /// </summary>
-    public abstract event EventHandler<ConnectionErrorEventArgs>? ConnectionError;
-
-    /// <summary>
-    /// Gets the underlying transport used by this client.
+    /// Gets a <see cref="Task{TResult}"/> that completes when the client session has completed.
     /// </summary>
     /// <remarks>
-    /// Provides access to the transport layer for advanced scenarios such as:
-    /// <list type="bullet">
-    ///   <item>Subscribing to ProcessTerminated events for stdio transports</item>
-    ///   <item>Checking transport-level connection state</item>
-    ///   <item>Accessing transport-specific lifecycle events</item>
-    /// </list>
+    /// <para>
+    /// The task always completes successfully. The result provides details about why the session
+    /// completed. Transport implementations may return derived types with additional strongly-typed
+    /// information, such as <see cref="StdioClientCompletionDetails"/>.
+    /// </para>
+    /// <para>
+    /// For graceful closure (e.g., explicit disposal), <see cref="ClientCompletionDetails.Exception"/>
+    /// will be <see langword="null"/>. For unexpected closure (e.g., process crash, network failure),
+    /// it may contain an exception that caused or that represents the failure.
+    /// </para>
     /// </remarks>
-    public abstract ITransport Transport { get; }
+    public abstract Task<ClientCompletionDetails> Completion { get; }
 }
