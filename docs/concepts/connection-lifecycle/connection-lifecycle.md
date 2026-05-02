@@ -186,7 +186,7 @@ var transport = new SseClientTransport(
 
 ## Sample Application
 
-See the [ConnectionLifecycleClient sample](https://github.com/modelcontextprotocol/csharp-sdk/tree/main/samples/ConnectionLifecycleClient) for a complete example demonstrating:
+See the [ConnectionLifecycleClient sample](https://github.com/erinloy/csharp-sdk/tree/main/samples/ConnectionLifecycleClient) for a complete example demonstrating:
 - Connection event handling
 - Automatic reconnection with exponential backoff
 - Connection health monitoring
