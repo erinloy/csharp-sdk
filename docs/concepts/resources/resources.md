@@ -11,7 +11,7 @@ MCP [resources] allow servers to expose data and content to clients. Resources r
 
 [resources]: https://modelcontextprotocol.io/specification/2025-11-25/server/resources
 
-This document covers implementing resources on the server, consuming them from the client, resource templates, subscriptions, and change notifications.
+This document covers implementing resources on the server, consuming resources from the client, resource templates, subscriptions, and change notifications.
 
 ### Defining resources on the server
 
@@ -74,7 +74,7 @@ Register resource types when building the server:
 
 ```csharp
 builder.Services.AddMcpServer()
-    .WithHttpTransport()
+    .WithHttpTransport(o => o.SessionMode = HttpServerSessionMode.Stateless)
     .WithResources<MyResources>()
     .WithResources<DocumentResources>();
 ```
@@ -208,26 +208,38 @@ Register subscription handlers when building the server:
 
 ```csharp
 builder.Services.AddMcpServer()
-    .WithHttpTransport()
+    // Subscriptions require stateful mode because the server pushes change notifications
+    // to clients. Set SessionMode = HttpServerSessionMode.Stateful since sessions are required.
+    .WithHttpTransport(o => o.SessionMode = HttpServerSessionMode.Stateful)
     .WithResources<MyResources>()
     .WithSubscribeToResourcesHandler(async (ctx, ct) =>
     {
-        if (ctx.Params?.Uri is { } uri)
+        if (ctx.Params.Uri is { } uri)
         {
-            // Track the subscription (e.g., in a concurrent dictionary)
+            // Track the subscription (for example, in a concurrent dictionary)
             subscriptions[ctx.Server.SessionId].TryAdd(uri, 0);
         }
         return new EmptyResult();
     })
     .WithUnsubscribeFromResourcesHandler(async (ctx, ct) =>
     {
-        if (ctx.Params?.Uri is { } uri)
+        if (ctx.Params.Uri is { } uri)
         {
             subscriptions[ctx.Server.SessionId].TryRemove(uri, out _);
         }
         return new EmptyResult();
     });
 ```
+
+#### Customizing a subscriptions/listen stream
+
+For the `2026-07-28` protocol version and later, a server can fully own a long-lived
+`subscriptions/listen` stream by registering `WithSubscriptionsListenHandler`. This replaces the
+SDK's built-in listen handling. The handler must send one
+`notifications/subscriptions/acknowledged` notification before other events, tag every streamed
+notification with the listen request ID in `_meta.subscriptionId`, and remain active until its
+cancellation token is cancelled. It must also configure only the server capabilities that the
+handler actually supports; this extension does not advertise capabilities automatically.
 
 #### Sending resource update notifications
 
@@ -242,7 +254,7 @@ await server.SendNotificationAsync(
 
 ### Resource list change notifications
 
-When the set of available resources changes (resources added or removed), the server notifies clients:
+When the set of available resources changes (resources added or removed), the server notifies clients.
 
 #### Sending notifications from the server
 

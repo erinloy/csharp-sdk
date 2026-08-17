@@ -256,7 +256,10 @@ public class McpServerBuilderExtensionsRequestFilterTests(ITestOutputHelper test
     [Fact]
     public async Task AddSubscribeToResourcesFilter_Logs_When_SubscribeToResources_Called()
     {
-        await using McpClient client = await CreateMcpClientForServer();
+        await using McpClient client = await CreateMcpClientForServer(new()
+        {
+            ProtocolVersion = McpProtocolVersions.November2025ProtocolVersion,
+        });
 
         await client.SubscribeToResourceAsync("test://resource/123", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -268,7 +271,10 @@ public class McpServerBuilderExtensionsRequestFilterTests(ITestOutputHelper test
     [Fact]
     public async Task AddUnsubscribeFromResourcesFilter_Logs_When_UnsubscribeFromResources_Called()
     {
-        await using McpClient client = await CreateMcpClientForServer();
+        await using McpClient client = await CreateMcpClientForServer(new()
+        {
+            ProtocolVersion = McpProtocolVersions.November2025ProtocolVersion,
+        });
 
         await client.UnsubscribeFromResourceAsync("test://resource/123", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -280,7 +286,7 @@ public class McpServerBuilderExtensionsRequestFilterTests(ITestOutputHelper test
     [Fact]
     public async Task AddSetLoggingLevelFilter_Logs_When_SetLoggingLevel_Called()
     {
-        await using McpClient client = await CreateMcpClientForServer();
+        await using McpClient client = await CreateMcpClientForServer(new McpClientOptions { ProtocolVersion = McpProtocolVersions.November2025ProtocolVersion });
 
         await client.SetLoggingLevelAsync(LoggingLevel.Info, cancellationToken: TestContext.Current.CancellationToken);
 
